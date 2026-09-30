@@ -1,0 +1,33 @@
+driver_interface:
+  ros__parameters:
+    # Industrial camera input and VINS-compatible grayscale output.
+    camera_input_topic: "/image_raw"
+    gray_output_topic: "/image_gray"
+
+    # PX4 v1.14 px4_msgs/msg/SensorCombined input and VINS IMU output.
+    px4_imu_input_topic: "/fmu/out/sensor_combined"
+    imu_output_topic: "/px4/imu"
+
+    # Empty image_frame_id preserves the camera driver's original frame_id.
+    image_frame_id: ""
+    imu_frame_id: "imu_link_flu"
+
+    # gyro_rad and accelerometer_m_s2 are expressed in PX4 FRD.
+    # VINS/ROS uses FLU in this project: x unchanged, y/z negated.
+    convert_frd_to_flu: true
+
+    # auto:          use PX4 time directly if it is already close to ROS time;
+    #                otherwise capture a fixed first-arrival clock offset.
+    # first_arrival: capture one PX4->ROS clock offset on the first IMU sample,
+    #                then preserve the PX4 sampling intervals (quick bring-up).
+    # px4:          use PX4 timestamp directly plus timestamp_offset_sec;
+    #                only use when PX4 and camera already share a time base.
+    # ros_now:      use callback reception time; diagnostics only, not final VIO.
+    timestamp_mode: "auto"
+    timestamp_offset_sec: 0.0
+    auto_direct_threshold_sec: 10.0
+    drop_non_monotonic_imu: true
+
+    # ROS covariance entries are variances. Zero means unknown/not supplied.
+    angular_velocity_variance: 0.0
+    linear_acceleration_variance: 0.0
