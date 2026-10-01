@@ -78,7 +78,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             "use_pose_graph",
-            default_value="false",
+            default_value="true                                                                      ",
             description="是否启动 VINS 回环检测",
         ),
 

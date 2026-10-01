@@ -121,14 +121,28 @@ namespace mindvision_camera
                     while (rclcpp::ok())
                     {
                         int status = CameraGetImageBuffer(h_camera_, &s_frame_info_, &pby_buffer_, 1000);
+
                         if (status == CAMERA_STATUS_SUCCESS)
                         {
+                            RCLCPP_DEBUG_THROTTLE(
+                                this->get_logger(),
+                                *this->get_clock(),
+                                1000,
+                                "camera timestamp=%u, exposure=%u us",
+                                s_frame_info_.uiTimeStamp,
+                                s_frame_info_.uiExpTime);
+                            const auto receive_time = this->get_clock()->now();
+
+                            const auto image_stamp = make_camera_stamp(
+                                s_frame_info_.uiTimeStamp,
+                                receive_time);
+
                             CameraImageProcess(h_camera_, pby_buffer_, image_msg_.data.data(), &s_frame_info_);
                             if (flip_image_)
                             {
                                 CameraFlipFrameBuffer(image_msg_.data.data(), &s_frame_info_, 3);
                             }
-                            camera_info_msg_.header.stamp = image_msg_.header.stamp = this->now();
+                            camera_info_msg_.header.stamp = image_msg_.header.stamp = image_stamp;
                             image_msg_.height = s_frame_info_.iHeight;
                             image_msg_.width = s_frame_info_.iWidth;
                             image_msg_.step = s_frame_info_.iWidth * 3;
@@ -195,7 +209,8 @@ namespace mindvision_camera
             status = CameraPlay(h_camera_);
             RCLCPP_WARN(this->get_logger(), "CameraPlay status = %d", status);
 
-            if (status != CAMERA_STATUS_SUCCESS) {
+            if (status != CAMERA_STATUS_SUCCESS)
+            {
                 RCLCPP_ERROR(this->get_logger(), "Soft camera restart failed.");
                 return false;
             }
@@ -216,7 +231,8 @@ namespace mindvision_camera
             status = CameraPlay(h_camera_);
             RCLCPP_ERROR(this->get_logger(), "CameraPlay after reconnect status = %d", status);
 
-            if (status != CAMERA_STATUS_SUCCESS) {
+            if (status != CAMERA_STATUS_SUCCESS)
+            {
                 RCLCPP_ERROR(this->get_logger(), "CameraReConnect failed.");
                 return false;
             }
@@ -385,6 +401,46 @@ namespace mindvision_camera
             return result;
         }
 
+        rclcpp::Time make_camera_stamp(
+            uint32_t camera_tick,
+            const rclcpp::Time& receive_time)
+        {
+            constexpr uint64_t kTickNs = 100000ULL; // 0.1 ms
+            constexpr uint64_t kUint32Range = 1ULL << 32;
+
+            if (!camera_stamp_initialized_)
+            {
+                camera_stamp_initialized_ = true;
+                last_camera_tick_ = camera_tick;
+                first_camera_tick_ = camera_tick;
+                first_ros_stamp_ns_ = receive_time.nanoseconds();
+
+                return rclcpp::Time(first_ros_stamp_ns_);
+            }
+
+            // 处理uint32时间戳回绕
+            if (camera_tick < last_camera_tick_ &&
+                static_cast<uint32_t>(last_camera_tick_ - camera_tick) >
+                0x80000000U)
+            {
+                camera_wrap_ticks_ += kUint32Range;
+            }
+
+            last_camera_tick_ = camera_tick;
+
+            const uint64_t extended_tick =
+                camera_wrap_ticks_ + camera_tick;
+
+            const uint64_t delta_tick =
+                extended_tick - first_camera_tick_;
+
+            const int64_t stamp_ns =
+                first_ros_stamp_ns_ +
+                static_cast<int64_t>(delta_tick * kTickNs);
+
+            return rclcpp::Time(stamp_ns);
+        }
+
         int h_camera_;
         uint8_t* pby_buffer_;
         tSdkCameraCapbility t_capability_; // 设备描述信息
@@ -406,6 +462,15 @@ namespace mindvision_camera
         std::thread capture_thread_;
 
         OnSetParametersCallbackHandle::SharedPtr params_callback_handle_;
+
+        //时间同步
+        bool camera_stamp_initialized_{false};
+
+        uint32_t last_camera_tick_{0};
+        uint64_t camera_wrap_ticks_{0};
+        uint64_t first_camera_tick_{0};
+
+        int64_t first_ros_stamp_ns_{0};
     };
 } // namespace mindvision_camera
 
