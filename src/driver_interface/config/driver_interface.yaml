@@ -1,4 +1,7 @@
-driver_interface:
+# Use the /** wildcard (not the node name) so that launch-file argument
+# overrides can take effect: launch_ros emits them as /**-scoped parameters,
+# and ROS gives node-specific params-file entries higher precedence than /**.
+/**:
   ros__parameters:
     # Industrial camera input and VINS-compatible grayscale output.
     camera_input_topic: "/image_raw"
