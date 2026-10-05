@@ -1,0 +1,34 @@
+# Optional direct-camera VINS preset. Both child launches read this file.
+# This preset is NOT used by default; existing full-speed RGB behavior remains.
+/camera_node:
+  ros__parameters:
+    camera_info_url: "package://mindvision_camera/config/camera_info.yaml"
+    camera_name: "mv_camera"
+    frame_id: "camera_optical_frame"
+    image_topic: "/image_raw"       # same topic for RGB and grayscale
+    output_encoding: "mono8"       # rgb8 or mono8
+    full_speed: false
+    target_fps: 30
+    use_sensor_data_qos: true
+    qos_depth: 1
+    exposure_time: 10000
+    flip_image: true                # must match your calibration images
+    gamma: 80
+    rgb_gain:
+      b: 100
+      g: 120
+      r: 155
+
+/driver_interface:
+  ros__parameters:
+    enable_image_bridge: false      # no image subscriber or gray publisher
+    px4_imu_input_topic: "/fmu/out/sensor_combined"
+    imu_output_topic: "/px4/imu"
+    imu_frame_id: "imu_link_flu"
+    convert_frd_to_flu: true
+    timestamp_mode: "px4"           # preserve ubuntu20.04 bringup's time mode
+    timestamp_offset_sec: 0.0
+    auto_direct_threshold_sec: 10.0
+    drop_non_monotonic_imu: true
+    angular_velocity_variance: 0.0
+    linear_acceleration_variance: 0.0

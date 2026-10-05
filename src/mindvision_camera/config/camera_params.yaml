@@ -1,5 +1,13 @@
-/mv_camera:
+/**:
   ros__parameters:
+    # Startup-only parameters. Restart after changing format/rate/topic/QoS.
+    # Both rgb8 and mono8 use this SAME topic.
+    image_topic: "/image_raw"
+    output_encoding: "rgb8"        # rgb8 or mono8
+    full_speed: true               # false: limit using target_fps
+    target_fps: 30                  # integer Hz; ignored in full-speed mode
+    use_sensor_data_qos: false      # true: best effort (recommended for VINS)
+    qos_depth: 1
     # analog_gain: 60
     camera_info_url: package://mindvision_camera/config/camera_info.yaml
     camera_name: mv_camera

@@ -13,6 +13,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
 
     driver_config_file = LaunchConfiguration("driver_config_file")
+    camera_config_file = LaunchConfiguration("camera_config_file")
 
     mindvision_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -22,6 +23,15 @@ def generate_launch_description():
                 "mv_launch.py",
             ])
         ),
+        launch_arguments={
+            "config_file": camera_config_file,
+            "full_speed": LaunchConfiguration("camera_full_speed"),
+            "target_fps": LaunchConfiguration("camera_target_fps"),
+            "output_encoding": LaunchConfiguration("camera_output_encoding"),
+            "image_topic": LaunchConfiguration("camera_image_topic"),
+            "use_sensor_data_qos": LaunchConfiguration("camera_use_sensor_data_qos"),
+            "qos_depth": LaunchConfiguration("camera_qos_depth"),
+        }.items(),
     )
 
     px4_system_launch = IncludeLaunchDescription(
@@ -44,6 +54,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "config_file": driver_config_file,
+            "enable_image_bridge": LaunchConfiguration("enable_image_bridge"),
         }.items(),
     )
 
@@ -78,7 +89,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             "use_pose_graph",
-            default_value="true                                                                      ",
+            default_value="true",
             description="是否启动 VINS 回环检测",
         ),
 
@@ -103,6 +114,24 @@ def generate_launch_description():
             ]),
             description="driver_interface 参数文件（bringup 包内副本）",
         ),
+
+        DeclareLaunchArgument(
+            "camera_config_file",
+            default_value=PathJoinSubstitution([
+                FindPackageShare("mindvision_camera"),
+                "config",
+                "camera_params.yaml",
+            ]),
+            description="相机参数文件；也可与 driver_config_file 指向同一多节点 YAML",
+        ),
+        # Empty values preserve settings in each config file.
+        DeclareLaunchArgument("camera_full_speed", default_value=""),
+        DeclareLaunchArgument("camera_target_fps", default_value=""),
+        DeclareLaunchArgument("camera_output_encoding", default_value=""),
+        DeclareLaunchArgument("camera_image_topic", default_value=""),
+        DeclareLaunchArgument("camera_use_sensor_data_qos", default_value=""),
+        DeclareLaunchArgument("camera_qos_depth", default_value=""),
+        DeclareLaunchArgument("enable_image_bridge", default_value=""),
 
         mindvision_camera_launch,
         px4_system_launch,

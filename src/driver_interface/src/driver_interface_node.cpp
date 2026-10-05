@@ -25,6 +25,10 @@ public:
   DriverInterfaceNode()
   : Node("driver_interface")
   {
+    rcl_interfaces::msg::ParameterDescriptor startup_desc;
+    startup_desc.read_only = true;
+    enable_image_bridge_ = declare_parameter<bool>(
+      "enable_image_bridge", true, startup_desc);
     camera_input_topic_ = declare_parameter<std::string>(
       "camera_input_topic", "/camera/image_raw");
     gray_output_topic_ = declare_parameter<std::string>(
@@ -68,23 +72,32 @@ public:
 
     const rclcpp::SensorDataQoS sensor_qos;
 
-    gray_publisher_ = create_publisher<sensor_msgs::msg::Image>(
-      gray_output_topic_, sensor_qos);
+    if (enable_image_bridge_) {
+      if (camera_input_topic_ == gray_output_topic_) {
+        throw std::invalid_argument(
+                "camera_input_topic and gray_output_topic must differ when image bridging is enabled");
+      }
+      gray_publisher_ = create_publisher<sensor_msgs::msg::Image>(
+        gray_output_topic_, sensor_qos);
+      image_subscription_ = create_subscription<sensor_msgs::msg::Image>(
+        camera_input_topic_, sensor_qos,
+        std::bind(&DriverInterfaceNode::image_callback, this, std::placeholders::_1));
+    }
     imu_publisher_ = create_publisher<sensor_msgs::msg::Imu>(
       imu_output_topic_, sensor_qos);
-
-    image_subscription_ = create_subscription<sensor_msgs::msg::Image>(
-      camera_input_topic_, sensor_qos,
-      std::bind(&DriverInterfaceNode::image_callback, this, std::placeholders::_1));
 
     px4_imu_subscription_ = create_subscription<px4_msgs::msg::SensorCombined>(
       px4_imu_input_topic_, sensor_qos,
       std::bind(&DriverInterfaceNode::imu_callback, this, std::placeholders::_1));
 
-    RCLCPP_INFO(
-      get_logger(),
-      "RGB image: %s -> mono8: %s",
-      camera_input_topic_.c_str(), gray_output_topic_.c_str());
+    if (enable_image_bridge_) {
+      RCLCPP_INFO(
+        get_logger(), "Image: %s -> mono8: %s",
+        camera_input_topic_.c_str(), gray_output_topic_.c_str());
+    } else {
+      RCLCPP_INFO(
+        get_logger(), "Image bridge disabled: no image subscription or grayscale publisher; IMU only");
+    }
     RCLCPP_INFO(
       get_logger(),
       "PX4 SensorCombined: %s -> sensor_msgs/Imu: %s",
@@ -275,6 +288,7 @@ private:
   std::string imu_frame_id_;
   std::string timestamp_mode_;
 
+  bool enable_image_bridge_{true};
   bool convert_frd_to_flu_{true};
   bool drop_non_monotonic_imu_{true};
   double timestamp_offset_sec_{0.0};

@@ -1,6 +1,6 @@
 # driver_interface
 
-面向 ROS 2 Humble、PX4 1.14 和 VINS-Mono ROS 2 的传感器接口节点。
+面向 Ubuntu 20.04 / ROS 2 Foxy、PX4 1.14 和 VINS-Mono ROS 2 的传感器接口节点。
 
 节点完成两条数据转换：
 
@@ -11,6 +11,25 @@
 PX4 SensorCombined                       sensor_msgs/Imu
 /fmu/out/sensor_combined -> driver_interface -> /px4/imu
 ```
+
+### 只接收IMU，不接收图像
+
+新增启动参数 `enable_image_bridge`，默认 `true` 保留原行为。
+设为 `false` 时既不创建图像订阅器，也不创建灰度发布器，IMU转换保持不变：
+
+```bash
+ros2 launch driver_interface driver_interface.launch.py enable_image_bridge:=false
+```
+
+也可以在 `config/driver_interface.yaml` 中设置
+`enable_image_bridge: false`；总 launch 使用的是 `bringup/config/driver_interface.yaml`
+或显式传入的 `driver_config_file`。只有显式传入的启动参数才会覆盖 YAML。
+改变开关后重启节点。
+
+相机直接输出 `mono8` 时，默认话题依然是 `/image_raw`，此时 VINS 配置使用
+`image_topic: "/image_raw"`、`imu_topic: "/px4/imu"`。不需要灰度中转节点。
+桥接开启时则使用 `/image_gray`（以实际 `gray_output_topic` 为准），输入和输出
+不能指向同一话题。完整配置示例见根目录 README。
 
 ## 1. 功能
 
@@ -43,7 +62,7 @@ orientation_covariance[0] = -1
 ```bash
 cd ~/Code/HBUT2025_rm_vision/Dron/px4_ros2_ws
 
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 
 rosdep install --from-paths src --ignore-src -r -y
 
@@ -111,7 +130,7 @@ estimate_extrinsic: 0
 
 ## 6. 时间戳模式
 
-参数 `timestamp_mode` 有三种值：
+参数 `timestamp_mode` 有四种值：
 
 ### `auto`（默认，推荐）
 
@@ -171,7 +190,7 @@ ros2 topic info -v /fmu/out/sensor_combined
 
 ```bash
 ros2 topic hz /camera/image_gray
-ros2 topic echo /camera/image_gray --once --field encoding
+ros2 topic echo /camera/image_gray sensor_msgs/msg/Image --no-arr --qos-reliability best_effort
 ros2 run rqt_image_view rqt_image_view /camera/image_gray
 ```
 
@@ -185,7 +204,7 @@ mono8
 
 ```bash
 ros2 topic hz /px4/imu
-ros2 topic echo /px4/imu --once
+ros2 topic echo /px4/imu sensor_msgs/msg/Imu --qos-reliability best_effort
 ```
 
 水平静止且采用 FLU 时，预期：
@@ -197,16 +216,20 @@ ros2 topic echo /px4/imu --once
 检查图像与 IMU 时间戳是否处于同一时基：
 
 ```bash
-ros2 topic echo /camera/image_gray --once --field header.stamp
-ros2 topic echo /px4/imu --once --field header.stamp
+ros2 topic echo /camera/image_gray sensor_msgs/msg/Image --no-arr --qos-reliability best_effort
+ros2 topic echo /px4/imu sensor_msgs/msg/Imu --qos-reliability best_effort
 ```
 
 两者不应相差飞控启动时间或 Unix 纪元量级。
+
+Foxy 不支持 `echo --once --field`；上面的命令会持续输出，查看消息里的
+`header.stamp` 后按 Ctrl+C 停止。关闭图像桥接时将图像话题改为 `/image_raw`。
 
 ## 8. 参数表
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
+| `enable_image_bridge` | `true` | `false` 时只转换IMU，不订阅/发布图像 |
 | `camera_input_topic` | `/camera/image_raw` | 工业相机 RGB 图像 |
 | `gray_output_topic` | `/camera/image_gray` | VINS 灰度图像 |
 | `px4_imu_input_topic` | `/fmu/out/sensor_combined` | PX4 SensorCombined |
