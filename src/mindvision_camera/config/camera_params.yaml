@@ -2,9 +2,12 @@
   ros__parameters:
     # Startup-only parameters. Restart after changing format/rate/topic/QoS.
     # Both rgb8 and mono8 use this SAME topic.
-    image_topic: "/image_raw"
-    output_encoding: "rgb8"        # rgb8 or mono8
-    full_speed: true               # false: limit using target_fps
+    image_topic: "/image_gray"
+    output_encoding: "mono8"        # rgb8 or mono8
+    # false: fast in-node Bayer->gray demosaic (full sensor fps, recommended).
+    # true:  use the SDK CameraImageProcess ISP (caps ~27 fps on the Jetson).
+    use_isp: false
+    full_speed: false               # false: limit using target_fps
     target_fps: 30                  # integer Hz; ignored in full-speed mode
     use_sensor_data_qos: false      # true: best effort (recommended for VINS)
     qos_depth: 1

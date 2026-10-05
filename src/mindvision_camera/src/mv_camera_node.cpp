@@ -19,12 +19,44 @@
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace mindvision_camera
 {
+    // The MindVision SDK always delivers raw 8-bit Bayer (BAYGB8) from
+    // CameraGetImageBuffer, regardless of CameraSetIspOutFormat. For mono8
+    // output we bypass the full CameraImageProcess ISP pipeline (which caps
+    // throughput at ~27 fps on the Jetson) and demosaic to grayscale here,
+    // reaching the full sensor frame rate (~100 fps).
+    //
+    // BAYGB8 layout: even rows are G B G B..., odd rows are R G R G..., so
+    // green pixels sit at (x + y) even. R/B pixels reuse the average of their
+    // two horizontal green neighbours.
+    void bayerGB8_to_gray(const uint8_t* src, uint8_t* dst, int width, int height)
+    {
+        for (int y = 0; y < height; ++y)
+        {
+            const uint8_t* row = src + static_cast<size_t>(y) * width;
+            uint8_t* out = dst + static_cast<size_t>(y) * width;
+            for (int x = 0; x < width; ++x)
+            {
+                if (((x + y) & 1) == 0)
+                {
+                    out[x] = row[x];
+                }
+                else
+                {
+                    const int l = x > 0 ? row[x - 1] : row[x + 1];
+                    const int r = x < width - 1 ? row[x + 1] : row[x - 1];
+                    out[x] = static_cast<uint8_t>((l + r) >> 1);
+                }
+            }
+        }
+    }
+
     class MVCameraNode : public rclcpp::Node
     {
     public:
@@ -40,6 +72,8 @@ namespace mindvision_camera
             target_fps_ = declare_parameter("target_fps", 30, startup_desc);
             output_encoding_ = declare_parameter<std::string>(
                 "output_encoding", "rgb8", startup_desc);
+            use_isp_ = declare_parameter(
+                "use_isp", false, startup_desc);
             image_topic_ = declare_parameter<std::string>(
                 "image_topic", "/image_raw", startup_desc);
             frame_id_ = declare_parameter<std::string>(
@@ -213,8 +247,20 @@ namespace mindvision_camera
                                 // reserve() alone does not make the vector writable.
                                 image_msg_.data.resize(
                                     static_cast<size_t>(image_msg_.step) * image_msg_.height);
-                                const int process_status = CameraImageProcess(
-                                    h_camera_, raw_buffer.get(), image_msg_.data.data(), &s_frame_info_);
+                                int process_status = CAMERA_STATUS_SUCCESS;
+                                if (output_encoding_ == "mono8" && !use_isp_)
+                                {
+                                    bayerGB8_to_gray(
+                                        raw_buffer.get(), image_msg_.data.data(),
+                                        s_frame_info_.iWidth, s_frame_info_.iHeight);
+                                    // Tell the SDK flip helper the buffer is now mono8.
+                                    s_frame_info_.uiMediaType = CAMERA_MEDIA_TYPE_MONO8;
+                                }
+                                else
+                                {
+                                    process_status = CameraImageProcess(
+                                        h_camera_, raw_buffer.get(), image_msg_.data.data(), &s_frame_info_);
+                                }
                                 // Do not hold an SDK buffer while serializing/publishing ROS data.
                                 raw_buffer.reset();
                                 if (process_status != CAMERA_STATUS_SUCCESS)
@@ -538,6 +584,7 @@ namespace mindvision_camera
         int target_fps_{30};
         size_t channels_{3};
         std::string output_encoding_;
+        bool use_isp_{false};
         std::string image_topic_;
         std::string frame_id_;
         FrameRateLimiter rate_limiter_;
