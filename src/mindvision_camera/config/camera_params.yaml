@@ -9,7 +9,8 @@
     use_isp: false
     full_speed: false               # false: limit using target_fps
     target_fps: 30                  # integer Hz; ignored in full-speed mode
-    use_sensor_data_qos: false      # true: best effort (recommended for VINS)
+    use_sensor_data_qos: false
+    # true: best effort (recommended for VINS)
     qos_depth: 1
     # analog_gain: 60
     camera_info_url: package://mindvision_camera/config/camera_info.yaml
