@@ -7,8 +7,8 @@
     frame_id: "camera_optical_frame"
     image_topic: "/image_raw"       # same topic for RGB and grayscale
     output_encoding: "mono8"       # rgb8 or mono8
-    full_speed: true
-    target_fps: 100
+    full_speed: false
+    target_fps: 30
     use_sensor_data_qos: true
     qos_depth: 1
     exposure_time: 10000
@@ -26,7 +26,7 @@
     imu_output_topic: "/px4/imu"
     imu_frame_id: "imu_link_flu"
     convert_frd_to_flu: true
-    timestamp_mode: "auto"          # use your verified time-base configuration
+    timestamp_mode: "px4"          # use your verified time-base configuration
     timestamp_offset_sec: 0.0
     auto_direct_threshold_sec: 10.0
     drop_non_monotonic_imu: true
