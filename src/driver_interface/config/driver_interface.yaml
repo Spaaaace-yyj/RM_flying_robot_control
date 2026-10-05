@@ -1,5 +1,7 @@
 driver_interface:
   ros__parameters:
+    # false: do not subscribe/publish images, convert PX4 IMU only.
+    enable_image_bridge: true
     # Industrial camera input and VINS-compatible grayscale output.
     camera_input_topic: "/image_raw"
     gray_output_topic: "/image_gray"

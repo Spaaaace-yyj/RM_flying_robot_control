@@ -45,6 +45,8 @@ rclcpp_components_register_node(${PROJECT_NAME}
 #############
 
 if(BUILD_TESTING)
+  add_executable(frame_rate_limiter_test test/frame_rate_limiter_test.cpp)
+  add_test(NAME frame_rate_limiter_test COMMAND frame_rate_limiter_test)
   find_package(ament_lint_auto REQUIRED)
   list(APPEND AMENT_LINT_AUTO_EXCLUDE
     ament_cmake_copyright

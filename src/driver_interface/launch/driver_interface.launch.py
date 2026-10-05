@@ -1,64 +1,69 @@
+import os
+
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
-import os
+
+def _parse_bool(value):
+    if value.lower() not in ("true", "false"):
+        raise ValueError("Boolean launch arguments must be true or false")
+    return value.lower() == "true"
+
+
+def _launch_setup(context):
+    config_file = LaunchConfiguration("config_file").perform(context)
+    with open(config_file, "r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream) or {}
+
+    params = {}
+    for key in ("/**", "driver_interface", "/driver_interface"):
+        if key in config:
+            params.update(config[key]["ros__parameters"])
+    if not params:
+        raise ValueError("No driver_interface ros__parameters found in " + config_file)
+
+    converters = {
+        "enable_image_bridge": _parse_bool,
+        "camera_input_topic": str,
+        "gray_output_topic": str,
+        "px4_imu_input_topic": str,
+        "imu_output_topic": str,
+        "timestamp_mode": str,
+        "timestamp_offset_sec": float,
+        "convert_frd_to_flu": _parse_bool,
+    }
+    for name, convert in converters.items():
+        value = LaunchConfiguration(name).perform(context)
+        if value != "":
+            params[name] = convert(value)
+
+    return [Node(
+        package="driver_interface",
+        executable="driver_interface_node",
+        name="driver_interface",
+        output="screen",
+        parameters=[params],
+    )]
 
 
 def generate_launch_description():
-    package_share = get_package_share_directory('driver_interface')
     default_config = os.path.join(
-        package_share, 'config', 'driver_interface.yaml')
-
-    config_file = LaunchConfiguration('config_file')
-    camera_input_topic = LaunchConfiguration('camera_input_topic')
-    gray_output_topic = LaunchConfiguration('gray_output_topic')
-    px4_imu_input_topic = LaunchConfiguration('px4_imu_input_topic')
-    imu_output_topic = LaunchConfiguration('imu_output_topic')
-    timestamp_mode = LaunchConfiguration('timestamp_mode')
-    timestamp_offset_sec = LaunchConfiguration('timestamp_offset_sec')
-    convert_frd_to_flu = LaunchConfiguration('convert_frd_to_flu')
+        get_package_share_directory("driver_interface"), "config", "driver_interface.yaml")
 
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'config_file', default_value=default_config,
-            description='Path to driver_interface parameter YAML'),
-        DeclareLaunchArgument(
-            'camera_input_topic', default_value='/image_raw'),
-        DeclareLaunchArgument(
-            'gray_output_topic', default_value='/image_gray'),
-        DeclareLaunchArgument(
-            'px4_imu_input_topic', default_value='/fmu/out/sensor_combined'),
-        DeclareLaunchArgument(
-            'imu_output_topic', default_value='/px4/imu'),
-        DeclareLaunchArgument(
-            'timestamp_mode', default_value='auto'),
-        DeclareLaunchArgument(
-            'timestamp_offset_sec', default_value='0.0'),
-        DeclareLaunchArgument(
-            'convert_frd_to_flu', default_value='true'),
-
-        Node(
-            package='driver_interface',
-            executable='driver_interface_node',
-            name='driver_interface',
-            output='screen',
-            parameters=[
-                config_file,
-                {
-                    'camera_input_topic': camera_input_topic,
-                    'gray_output_topic': gray_output_topic,
-                    'px4_imu_input_topic': px4_imu_input_topic,
-                    'imu_output_topic': imu_output_topic,
-                    'timestamp_mode': timestamp_mode,
-                    'timestamp_offset_sec': ParameterValue(
-                        timestamp_offset_sec, value_type=float),
-                    'convert_frd_to_flu': ParameterValue(
-                        convert_frd_to_flu, value_type=bool),
-                },
-            ],
-        ),
+        DeclareLaunchArgument("config_file", default_value=default_config),
+        # Empty means use YAML; explicit launch arguments override YAML.
+        DeclareLaunchArgument("enable_image_bridge", default_value=""),
+        DeclareLaunchArgument("camera_input_topic", default_value=""),
+        DeclareLaunchArgument("gray_output_topic", default_value=""),
+        DeclareLaunchArgument("px4_imu_input_topic", default_value=""),
+        DeclareLaunchArgument("imu_output_topic", default_value=""),
+        DeclareLaunchArgument("timestamp_mode", default_value=""),
+        DeclareLaunchArgument("timestamp_offset_sec", default_value=""),
+        DeclareLaunchArgument("convert_frd_to_flu", default_value=""),
+        OpaqueFunction(function=_launch_setup),
     ])

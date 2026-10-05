@@ -12,6 +12,25 @@ PX4 SensorCombined                       sensor_msgs/Imu
 /fmu/out/sensor_combined -> driver_interface -> /px4/imu
 ```
 
+### 只接收IMU，不接收图像
+
+新增启动参数 `enable_image_bridge`，默认 `true` 保留原行为。
+设为 `false` 时既不创建图像订阅器，也不创建灰度发布器，IMU转换保持不变：
+
+```bash
+ros2 launch driver_interface driver_interface.launch.py enable_image_bridge:=false
+```
+
+也可以在 `config/driver_interface.yaml` 中设置
+`enable_image_bridge: false`；总 launch 使用的是 `bringup/config/driver_interface.yaml`
+或显式传入的 `driver_config_file`。只有显式传入的启动参数才会覆盖 YAML。
+改变开关后重启节点。
+
+相机直接输出 `mono8` 时，默认话题依然是 `/image_raw`，此时 VINS 配置使用
+`image_topic: "/image_raw"`、`imu_topic: "/px4/imu"`。不需要灰度中转节点。
+桥接开启时则使用 `/image_gray`（以实际 `gray_output_topic` 为准），输入和输出
+不能指向同一话题。完整配置示例见根目录 README。
+
 ## 1. 功能
 
 - 将 `rgb8`、`bgr8`、`rgba8`、`bgra8` 等图像转换为 `mono8`；

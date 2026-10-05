@@ -3,6 +3,7 @@
 
 // MindVision Camera SDK
 #include <CameraApi.h>
+#include "frame_rate_limiter.hpp"
 
 // ROS
 #include <camera_info_manager/camera_info_manager.hpp>
@@ -13,7 +14,11 @@
 #include <sensor_msgs/msg/image.hpp>
 
 // C++ system
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,6 +31,32 @@ namespace mindvision_camera
         explicit MVCameraNode(const rclcpp::NodeOptions& options) : Node("mv_camera", options)
         {
             RCLCPP_INFO(this->get_logger(), "Starting MVCameraNode!");
+
+            // Output format/rate/QoS are startup-only: changing them requires
+            // reconfiguring the SDK and publisher together, so restart the node.
+            rcl_interfaces::msg::ParameterDescriptor startup_desc;
+            startup_desc.read_only = true;
+            full_speed_ = declare_parameter("full_speed", true, startup_desc);
+            target_fps_ = declare_parameter("target_fps", 30, startup_desc);
+            output_encoding_ = declare_parameter<std::string>(
+                "output_encoding", "rgb8", startup_desc);
+            image_topic_ = declare_parameter<std::string>(
+                "image_topic", "/image_raw", startup_desc);
+            frame_id_ = declare_parameter<std::string>(
+                "frame_id", "camera_optical_frame", startup_desc);
+            const bool use_sensor_data_qos = declare_parameter(
+                "use_sensor_data_qos", false, startup_desc);
+            const int qos_depth = declare_parameter("qos_depth", 1, startup_desc);
+            if (target_fps_ < 1 || target_fps_ > 1000000000 || qos_depth < 1 ||
+                image_topic_.empty() ||
+                (output_encoding_ != "rgb8" && output_encoding_ != "mono8"))
+            {
+                throw std::invalid_argument(
+                    "target_fps must be in [1, 1000000000], qos_depth >= 1, "
+                    "image_topic nonempty, output_encoding rgb8 or mono8");
+            }
+            channels_ = output_encoding_ == "mono8" ? 1 : 3;
+            rate_limiter_.configure(full_speed_, target_fps_);
 
             CameraSdkInit(1);
 
@@ -54,21 +85,37 @@ namespace mindvision_camera
                 RCLCPP_ERROR(this->get_logger(), "Init failed!");
                 return;
             }
+            camera_initialized_ = true;
 
             // 获得相机的特性描述结构体。该结构体中包含了相机可设置的各种参数的范围信息。决定了相关函数的参数
             CameraGetCapability(h_camera_, &t_capability_);
 
             // 直接使用vector的内存作为相机输出buffer
             image_msg_.data.reserve(
-                t_capability_.sResolutionRange.iHeightMax * t_capability_.sResolutionRange.iWidthMax * 3);
+                static_cast<size_t>(t_capability_.sResolutionRange.iHeightMax) *
+                static_cast<size_t>(t_capability_.sResolutionRange.iWidthMax) * channels_);
 
             // 设置手动曝光
             CameraSetAeState(h_camera_, false);
 
             // 设置相机高速模式
-            tSdkCameraCapbility pCameraInfo;
-            CameraGetCapability(h_camera_, &pCameraInfo);
-            CameraSetFrameSpeed(h_camera_, pCameraInfo.iFrameSpeedDesc);
+            // iFrameSpeedDesc is a count, not a valid index.
+            if (t_capability_.iFrameSpeedDesc > 0)
+            {
+                i_status = CameraSetFrameSpeed(h_camera_, t_capability_.iFrameSpeedDesc - 1);
+                if (i_status != CAMERA_STATUS_SUCCESS)
+                    RCLCPP_WARN(get_logger(), "CameraSetFrameSpeed failed: %d", i_status);
+            }
+
+            // Only some cameras support exact hardware rate control. Always
+            // enforce the limit before ISP processing as a software fallback.
+            i_status = CameraSetFrameRate(h_camera_, full_speed_ ? 0 : target_fps_);
+            if (i_status != CAMERA_STATUS_SUCCESS)
+            {
+                RCLCPP_WARN(get_logger(),
+                    "CameraSetFrameRate unsupported/failed: %d; hardware rate unchanged, "
+                    "software limit %s", i_status, full_speed_ ? "disabled" : "enabled");
+            }
 
             // Declare camera parameters
             declareParameters();
@@ -76,16 +123,28 @@ namespace mindvision_camera
             // 让SDK进入工作模式，开始接收来自相机发送的图像
             // 数据。如果当前相机是触发模式，则需要接收到
             // 触发帧以后才会更新图像。
-            CameraPlay(h_camera_);
-
-            CameraSetIspOutFormat(h_camera_, CAMERA_MEDIA_TYPE_RGB8);
+            i_status = CameraSetIspOutFormat(h_camera_,
+                channels_ == 1 ? CAMERA_MEDIA_TYPE_MONO8 : CAMERA_MEDIA_TYPE_RGB8);
+            if (i_status == CAMERA_STATUS_SUCCESS)
+                i_status = CameraPlay(h_camera_);
+            if (i_status != CAMERA_STATUS_SUCCESS)
+            {
+                RCLCPP_ERROR(get_logger(), "Camera format/start failed: %d", i_status);
+                CameraUnInit(h_camera_);
+                camera_initialized_ = false;
+                return;
+            }
 
             // Create camera publisher
             // rqt_image_view can't subscribe image msg with sensor_data QoS
             // https://github.com/ros-visualization/rqt/issues/187
-            bool use_sensor_data_qos = this->declare_parameter("use_sensor_data_qos", false);
             auto qos = use_sensor_data_qos ? rmw_qos_profile_sensor_data : rmw_qos_profile_default;
-            camera_pub_ = image_transport::create_camera_publisher(this, "image_raw", qos);
+            qos.depth = static_cast<size_t>(qos_depth);
+            camera_pub_ = image_transport::create_camera_publisher(this, image_topic_, qos);
+            RCLCPP_INFO(get_logger(), "Image %s: %s, %s, target=%d Hz, QoS=%s/depth=%d",
+                image_topic_.c_str(), output_encoding_.c_str(),
+                full_speed_ ? "full speed" : "rate limited", target_fps_,
+                use_sensor_data_qos ? "best effort" : "reliable", qos_depth);
 
             // Load camera info
             camera_name_ = this->declare_parameter("camera_name", "mv_camera");
@@ -112,18 +171,25 @@ namespace mindvision_camera
                 {
                     RCLCPP_INFO(this->get_logger(), "Publishing image!");
 
-                    camera_info_msg_.header.frame_id = image_msg_.header.frame_id = "camera_optical_frame";
-                    image_msg_.encoding = "rgb8";
+                    camera_info_msg_.header.frame_id = image_msg_.header.frame_id = frame_id_;
+                    image_msg_.encoding = output_encoding_;
+                    image_msg_.is_bigendian = false;
+                    size_t captured = 0, published = 0;
+                    auto report_start = std::chrono::steady_clock::now();
 
-                    bool debug_ = true;
-
-
-                    while (rclcpp::ok())
+                    while (running_.load() && rclcpp::ok())
                     {
                         int status = CameraGetImageBuffer(h_camera_, &s_frame_info_, &pby_buffer_, 1000);
 
                         if (status == CAMERA_STATUS_SUCCESS)
                         {
+                            // Release on every exit path, including allocation failures.
+                            const auto release_buffer = [this](uint8_t* buffer) {
+                                CameraReleaseImageBuffer(h_camera_, buffer);
+                            };
+                            std::unique_ptr<uint8_t, decltype(release_buffer)> raw_buffer(
+                                pby_buffer_, release_buffer);
+                            ++captured;
                             RCLCPP_DEBUG_THROTTLE(
                                 this->get_logger(),
                                 *this->get_clock(),
@@ -137,35 +203,45 @@ namespace mindvision_camera
                                 s_frame_info_.uiTimeStamp,
                                 receive_time);
 
-                            CameraImageProcess(h_camera_, pby_buffer_, image_msg_.data.data(), &s_frame_info_);
-                            if (flip_image_)
+                            const bool process_frame =
+                                rate_limiter_.accept(image_stamp.nanoseconds());
+                            if (process_frame && s_frame_info_.iWidth > 0 && s_frame_info_.iHeight > 0)
                             {
-                                CameraFlipFrameBuffer(image_msg_.data.data(), &s_frame_info_, 3);
-                            }
-                            camera_info_msg_.header.stamp = image_msg_.header.stamp = image_stamp;
-                            image_msg_.height = s_frame_info_.iHeight;
-                            image_msg_.width = s_frame_info_.iWidth;
-                            image_msg_.step = s_frame_info_.iWidth * 3;
-                            image_msg_.data.resize(s_frame_info_.iWidth * s_frame_info_.iHeight * 3);
-
-                            camera_pub_.publish(image_msg_, camera_info_msg_);
-
-                            // 在成功调用CameraGetImageBuffer后，必须调用CameraReleaseImageBuffer来释放获得的buffer。
-                            // 否则再次调用CameraGetImageBuffer时，程序将被挂起一直阻塞，
-                            // 直到其他线程中调用CameraReleaseImageBuffer来释放了buffer
-                            CameraReleaseImageBuffer(h_camera_, pby_buffer_);
-
-                            if (debug_)
-                            {
-                                static int fps = 0;
-                                static auto start_time = this->now();
-                                if (this->now() - start_time >= rclcpp::Duration::from_seconds(1.0))
+                                image_msg_.height = s_frame_info_.iHeight;
+                                image_msg_.width = s_frame_info_.iWidth;
+                                image_msg_.step = image_msg_.width * channels_;
+                                // reserve() alone does not make the vector writable.
+                                image_msg_.data.resize(
+                                    static_cast<size_t>(image_msg_.step) * image_msg_.height);
+                                const int process_status = CameraImageProcess(
+                                    h_camera_, raw_buffer.get(), image_msg_.data.data(), &s_frame_info_);
+                                // Do not hold an SDK buffer while serializing/publishing ROS data.
+                                raw_buffer.reset();
+                                if (process_status != CAMERA_STATUS_SUCCESS)
                                 {
-                                    RCLCPP_INFO(rclcpp::get_logger("mindvision_camera"), "Camera FPS: %d", fps);
-                                    fps = 0;
-                                    start_time = this->now();
+                                    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                                        "CameraImageProcess failed: %d", process_status);
+                                    continue;
                                 }
-                                fps++;
+                                if (flip_image_)
+                                {
+                                    CameraFlipFrameBuffer(image_msg_.data.data(), &s_frame_info_, 3);
+                                }
+                                camera_info_msg_.header.stamp = image_msg_.header.stamp = image_stamp;
+                                camera_pub_.publish(image_msg_, camera_info_msg_);
+                                ++published;
+                            }
+                            raw_buffer.reset();
+
+                            const auto report_now = std::chrono::steady_clock::now();
+                            const double elapsed = std::chrono::duration<double>(
+                                report_now - report_start).count();
+                            if (elapsed >= 1.0)
+                            {
+                                RCLCPP_INFO(get_logger(), "Camera FPS: capture=%.1f, publish=%.1f",
+                                    captured / elapsed, published / elapsed);
+                                captured = published = 0;
+                                report_start = report_now;
                             }
                         }
                         else
@@ -186,12 +262,14 @@ namespace mindvision_camera
 
         ~MVCameraNode() override
         {
+            running_.store(false);
             if (capture_thread_.joinable())
             {
                 capture_thread_.join();
             }
 
-            CameraUnInit(h_camera_);
+            if (camera_initialized_)
+                CameraUnInit(h_camera_);
 
             RCLCPP_INFO(this->get_logger(), "Camera node destroyed!");
         }
@@ -415,7 +493,7 @@ namespace mindvision_camera
                 first_camera_tick_ = camera_tick;
                 first_ros_stamp_ns_ = receive_time.nanoseconds();
 
-                return rclcpp::Time(first_ros_stamp_ns_);
+                return rclcpp::Time(first_ros_stamp_ns_, receive_time.get_clock_type());
             }
 
             // 处理uint32时间戳回绕
@@ -438,11 +516,13 @@ namespace mindvision_camera
                 first_ros_stamp_ns_ +
                 static_cast<int64_t>(delta_tick * kTickNs);
 
-            return rclcpp::Time(stamp_ns);
+            return rclcpp::Time(stamp_ns, receive_time.get_clock_type());
         }
 
-        int h_camera_;
-        uint8_t* pby_buffer_;
+        int h_camera_{-1};
+        bool camera_initialized_{false};
+        std::atomic<bool> running_{true};
+        uint8_t* pby_buffer_{nullptr};
         tSdkCameraCapbility t_capability_; // 设备描述信息
         tSdkFrameHead s_frame_info_; // 图像帧头信息
 
@@ -453,7 +533,14 @@ namespace mindvision_camera
         // RGB Gain
         int r_gain_, g_gain_, b_gain_;
 
-        bool flip_image_;
+        std::atomic<bool> flip_image_{false};
+        bool full_speed_{true};
+        int target_fps_{30};
+        size_t channels_{3};
+        std::string output_encoding_;
+        std::string image_topic_;
+        std::string frame_id_;
+        FrameRateLimiter rate_limiter_;
 
         std::string camera_name_;
         std::unique_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
