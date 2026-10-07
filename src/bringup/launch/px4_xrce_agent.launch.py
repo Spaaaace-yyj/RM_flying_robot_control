@@ -8,7 +8,7 @@ def generate_launch_description():
         cmd=[
             'MicroXRCEAgent',
             'serial',
-            '--dev', '/dev/ttyUSB0',
+            '--dev', '/dev/ttyTHS0',
             '-b', '921600'
         ],
         output='screen'

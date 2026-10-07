@@ -26,16 +26,20 @@
 
 namespace mindvision_camera
 {
-    // The MindVision SDK always delivers raw 8-bit Bayer (BAYGB8) from
+    // The MindVision SDK always delivers raw 8-bit Bayer data from
     // CameraGetImageBuffer, regardless of CameraSetIspOutFormat. For mono8
     // output we bypass the full CameraImageProcess ISP pipeline (which caps
     // throughput at ~27 fps on the Jetson) and demosaic to grayscale here,
     // reaching the full sensor frame rate (~100 fps).
     //
-    // BAYGB8 layout: even rows are G B G B..., odd rows are R G R G..., so
-    // green pixels sit at (x + y) even. R/B pixels reuse the average of their
-    // two horizontal green neighbours.
-    void bayerGB8_to_gray(const uint8_t* src, uint8_t* dst, int width, int height)
+    // The Bayer pattern is read from the frame head (uiMediaType) so the
+    // demosaic matches the sensor instead of assuming a fixed layout (e.g. the
+    // MV-SUA133GC is BAYBG8, not BAYGB8). Only the green sites matter for
+    // grayscale; R/B sites reuse the average of their two horizontal green
+    // neighbours. green_on_even selects the green phase: GBRG/GRBG place green
+    // on (x + y) even, RGGB/BGGR on (x + y) odd.
+    void bayer_to_gray(const uint8_t* src, uint8_t* dst, int width, int height,
+                       bool green_on_even)
     {
         for (int y = 0; y < height; ++y)
         {
@@ -43,7 +47,8 @@ namespace mindvision_camera
             uint8_t* out = dst + static_cast<size_t>(y) * width;
             for (int x = 0; x < width; ++x)
             {
-                if (((x + y) & 1) == 0)
+                const bool is_green = (((x + y) & 1) == 0) == green_on_even;
+                if (is_green)
                 {
                     out[x] = row[x];
                 }
@@ -54,6 +59,23 @@ namespace mindvision_camera
                     out[x] = static_cast<uint8_t>((l + r) >> 1);
                 }
             }
+        }
+    }
+
+    // True when the green pixels of a Bayer media type sit on (x + y) even.
+    bool bayer_green_on_even(unsigned int media_type)
+    {
+        switch (media_type)
+        {
+            case CAMERA_MEDIA_TYPE_BAYGR8:  // GRBG
+            case CAMERA_MEDIA_TYPE_BAYGB8:  // GBRG
+                return true;
+            case CAMERA_MEDIA_TYPE_BAYRG8:  // RGGB
+            case CAMERA_MEDIA_TYPE_BAYBG8:  // BGGR
+                return false;
+            default:
+                // Unknown or non-Bayer input: default to the even-green layouts.
+                return true;
         }
     }
 
@@ -250,9 +272,10 @@ namespace mindvision_camera
                                 int process_status = CAMERA_STATUS_SUCCESS;
                                 if (output_encoding_ == "mono8" && !use_isp_)
                                 {
-                                    bayerGB8_to_gray(
+                                    bayer_to_gray(
                                         raw_buffer.get(), image_msg_.data.data(),
-                                        s_frame_info_.iWidth, s_frame_info_.iHeight);
+                                        s_frame_info_.iWidth, s_frame_info_.iHeight,
+                                        bayer_green_on_even(s_frame_info_.uiMediaType));
                                     // Tell the SDK flip helper the buffer is now mono8.
                                     s_frame_info_.uiMediaType = CAMERA_MEDIA_TYPE_MONO8;
                                 }
