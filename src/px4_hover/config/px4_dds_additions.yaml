@@ -1,0 +1,8 @@
+# MERGE these entries into publications in the real PX4 v1.14.3
+# src/modules/uxrce_dds_client/dds_topics.yaml, then rebuild/flash YOUR board firmware.
+# This is documentation, NOT a ROS parameter file or a replacement for the whole DDS file.
+publications:
+  - topic: /fmu/out/estimator_status_flags
+    type: px4_msgs::msg::EstimatorStatusFlags
+  - topic: /fmu/out/vehicle_command_ack
+    type: px4_msgs::msg::VehicleCommandAck

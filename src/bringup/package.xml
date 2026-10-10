@@ -8,8 +8,14 @@
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
   <exec_depend>ros2launch</exec_depend>
+  <exec_depend>px4_hover</exec_depend>
+  <exec_depend>vins_estimator</exec_depend>
+  <exec_depend>feature_tracker</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>mindvision_camera</exec_depend>
   <exec_depend>driver_interface</exec_depend>
 

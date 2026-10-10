@@ -38,7 +38,7 @@ install(TARGETS driver_interface_node
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME})
 
-install(FILES README.md LICENSE
+install(FILES LICENSE
   DESTINATION share/${PROJECT_NAME})
 
 ament_package()

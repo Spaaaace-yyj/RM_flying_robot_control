@@ -1,0 +1,48 @@
+px4_hover:
+  ros__parameters:
+    # ROS2 Humble / PX4 v1.14.3. Launch does not request flight.
+    vins_state_topic: /vins_estimator/imu_propagate
+    vins_backend_topic: /vins_estimator/odometry
+    vins_restart_topic: /feature_tracker/restart
+    vins_world_frame: world
+    # Current VINS source writes Vs (world velocity), despite child_frame_id=body.
+    vins_velocity_frame: world
+    # Rotation mapping PX4 body FLU vectors into the VINS IMU FLU axes.
+    # driver_interface already supplies board/body-aligned PX4 IMU: identity.
+    imu_from_body_xyzw: [0.0, 0.0, 0.0, 1.0]
+    px4_namespace: /fmu
+    target_system: 1
+    target_component: 1
+    source_system: 245
+    source_component: 191
+    publish_rate_hz: 50.0
+    # Incoming DDS timestamps and VINS headers must already share the ROS clock.
+    # PX4 XRCE serializes/deserializes timestamps with its session time offset.
+    require_timesync: true
+    max_timesync_age: 5.0
+    max_round_trip_ms: 20.0
+    # Add estimator_status_flags to the firmware DDS publications; see README.
+    require_ev_status: true
+    require_ev_yaw: true
+    max_vio_age: 0.3
+    max_backend_age: 0.8
+    max_px4_age: 0.5
+    stable_seconds: 2.0
+    max_vio_speed: 8.0
+    max_pose_jump: 0.4
+    max_yaw_jump: 0.6
+    # Conservative configured measurement stddevs, not Allan IMU noise values.
+    position_stddev: 0.1
+    velocity_stddev: 0.15
+    orientation_stddev: 0.1
+    # Default: RC must arm first. true only permits arming after an explicit takeoff service.
+    allow_arm_requests: false
+    takeoff_height: 1.0
+    climb_speed: 0.25
+    prime_seconds: 1.5
+    command_interval: 1.0
+    command_timeout: 8.0
+    max_command_attempts: 5
+    max_start_speed: 0.35
+    max_hover_error: 1.0
+    hover_tolerance: 0.15

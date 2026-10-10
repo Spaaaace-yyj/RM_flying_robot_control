@@ -1,6 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
@@ -42,6 +43,9 @@ def generate_launch_description():
                 "px4_xrce_agent.launch.py",
             ])
         ),
+        launch_arguments={"device": LaunchConfiguration("agent_device"),
+                          "baud": LaunchConfiguration("agent_baud")}.items(),
+        condition=IfCondition(LaunchConfiguration("start_agent")),
     )
 
     driver_interface_launch = IncludeLaunchDescription(
@@ -133,6 +137,9 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_qos_depth", default_value=""),
         DeclareLaunchArgument("enable_image_bridge", default_value=""),
 
+        DeclareLaunchArgument("start_agent", default_value="true"),
+        DeclareLaunchArgument("agent_device", default_value="/dev/ttyUSB0"),
+        DeclareLaunchArgument("agent_baud", default_value="921600"),
         mindvision_camera_launch,
         px4_system_launch,
         driver_interface_launch,

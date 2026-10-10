@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>px4_hover</name>
+  <version>0.2.0</version>
+  <description>C++ VINS external vision bridge and explicit PX4 v1.14 hover state machine.</description>
+  <maintainer email="Spaaaace-yyj@users.noreply.github.com">Spaaaace-yyj</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>px4_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>eigen</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <test_depend>ament_cmake_test</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -1,19 +1,12 @@
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-
-    micro_xrce_agent = ExecuteProcess(
-        cmd=[
-            'MicroXRCEAgent',
-            'serial',
-            '--dev', '/dev/ttyUSB0',
-            '-b', '921600'
-        ],
-        output='screen'
-    )
-
     return LaunchDescription([
-        micro_xrce_agent
+        DeclareLaunchArgument('device', default_value='/dev/ttyUSB0'),
+        DeclareLaunchArgument('baud', default_value='921600'),
+        ExecuteProcess(cmd=['MicroXRCEAgent', 'serial', '--dev', LaunchConfiguration('device'),
+                            '-b', LaunchConfiguration('baud')], output='screen'),
     ])
