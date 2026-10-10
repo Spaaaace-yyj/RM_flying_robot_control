@@ -54,6 +54,12 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             "vins_config_file",
+            default_value=PathJoinSubstitution([
+                FindPackageShare("vins_estimator"),
+                "config",
+                "euroc",
+                "euroc_config_px4.yaml",
+            ]),
             description="实机标定的 VINS OpenCV YAML 绝对路径（必填）",
         ),
 
