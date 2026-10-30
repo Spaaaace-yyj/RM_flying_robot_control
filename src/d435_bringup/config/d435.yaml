@@ -31,13 +31,13 @@ enable_accel: false
 enable_rgbd: false
 
 # ---------- 分辨率、帧率、格式 ----------
-depth_module.depth_profile: "640x480x30"
-depth_module.infra_profile: "640x480x30"
+depth_module.depth_profile: "848x480x90"
+depth_module.infra_profile: "848x480x90"
 depth_module.depth_format: "Z16"
 depth_module.infra1_format: "Y8"
 depth_module.infra2_format: "Y8"
 # 只有 enable_color 为 true 时，下面的彩色配置才用于启动彩色流。
-rgb_camera.color_profile: "640x480x30"
+rgb_camera.color_profile: "848x480x60"
 rgb_camera.color_format: "RGB8"
 rgb_camera.enable_auto_exposure: true
 
@@ -57,7 +57,7 @@ depth_module.inter_cam_sync_mode: 0
 # ---------- 图像后处理 ----------
 # 深度对齐到 RGB 需要同时开启 RGB；此处保持关闭。
 align_depth.enable: true
-colorizer.enable: true
+colorizer.enable: false
 decimation_filter.enable: false
 spatial_filter.enable: false
 temporal_filter.enable: false
@@ -70,7 +70,7 @@ pointcloud.enable: true
 # 无 RGB 时，若要开启无纹理点云，可同时保留下面的设置。
 pointcloud.stream_filter: 1
 pointcloud.stream_index_filter: 1
-pointcloud.allow_no_texture_points: false
+pointcloud.allow_no_texture_points: true
 pointcloud.ordered_pc: false
 
 # ---------- ROS 输出 ----------
