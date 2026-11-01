@@ -7,7 +7,7 @@
 > **文档说明**：本文档是仓库唯一的说明文档。原先分散在各包内的 README
 > （`px4_hover`、`driver_interface`、`mindvision_camera`）以及 `docs/PX4_HOVER.md`、
 > `docs/CPP_MIGRATION.md` 的内容已全部合并到这里，那些文件已删除。
-> 第三方代码 `src/px4_msgs` 与子模块 `src/VINS-Mono` 保留各自的上游文档。
+> 第三方代码 `src/px4_msgs` 与 `src/VINS-Mono` 保留各自的上游文档。
 
 ## 目录
 
@@ -25,6 +25,7 @@
 - [12. 已验证与尚未验证](#12-已验证与尚未验证)
 - [13. C++ 迁移说明](#13-c-迁移说明)
 - [14. 参考](#14-参考)
+- [15. 开源协议与第三方来源](#15-开源协议与第三方来源)
 
 ## 1. 分支与包结构
 
@@ -40,7 +41,7 @@
 | `src/px4_hover` | VINS → PX4 外部定位桥接、就绪检查、显式起飞/接管/降落状态机 |
 | `src/bringup` | 总启动包：`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
 | `src/px4_msgs` | PX4 v1.14 消息定义（以源码 vendored，非子模块） |
-| `src/VINS-Mono` | git 子模块，VINS-Mono 的 ROS 2 移植版，锁在 `ec59526` |
+| `src/VINS-Mono` | 普通源码目录，由外层 Git 直接管理；ROS 2 移植版，导入自 `ec59526` |
 | `Camera/` | 相机录制数据（`.mvdat`，被 `.gitignore` 忽略） |
 
 `px4_hover` 已改为 **C++17 / rclcpp / Eigen3**，运行时不依赖 Python/numpy；
@@ -85,8 +86,8 @@ VINS 的 world 只有重力方向有约束，初始 yaw 和原点是任意的。
 
 ```bash
 # 克隆
-git clone https://github.com/Spaaaace-yyj/RM_Dron_control.git
-git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init --recursive
+git clone https://github.com/Spaaaace-yyj/RM_flying_robot_control.git
+cd RM_flying_robot_control
 # 确保安装了 ROS 2 Humble
 sudo apt update
 
@@ -152,7 +153,6 @@ sudo apt install libeigen3-dev ros-humble-ament-cmake-test
 # 退出 Conda；ROS launch/构建工具仍使用系统 Python
 conda deactivate
 source /opt/ros/humble/setup.bash
-git submodule update --init --recursive
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install \
   --packages-up-to bringup vins_estimator \
@@ -176,8 +176,7 @@ source install/setup.bash
 ./build.sh
 ```
 
-已有子模块 SSH 访问限制时，将 `.gitmodules` 的 URL 改为对应 HTTPS 后再执行
-`git submodule sync`，或使用你原来已成功的子模块拉取方法。
+VINS-Mono 已随本仓库源码一起提供，无需单独拉取；版本来源与许可见第 15 节。
 
 ## 4. PX4 固件 DDS 话题准备
 
@@ -1063,3 +1062,55 @@ C++ 迁移不代表解决 VINS 漂移、完成 EKF2 融合验收或降低 VINS �
 - [ROS 2 相机标定教程](https://navigation.ros.org/tutorials/docs/camera_calibration.html)
 - [camera_calibration 参数说明](http://wiki.ros.org/camera_calibration)
 - [ros2_mindvision_camera 上游](https://github.com/chenjunnn/ros2_mindvision_camera)
+
+## 15. 开源协议与第三方来源
+
+### VINS-Mono 的来源与版本
+
+`src/VINS-Mono` 现在是由本仓库最外层 Git 直接管理的普通源码目录，
+不再是子模块；目录中不包含独立的 `.git`，根目录也不再需要 `.gitmodules`。
+新克隆只需 `git clone`，无需 `git submodule update`。后续在该目录修改代码时，
+直接在本仓库提交；切换外层分支会同时切换对应的 VINS-Mono 源码。
+
+本次迁移分别完整导入两个外层分支原先锁定的版本，保留所有受跟踪文件及文件权限：
+
+| 外层分支 | 原 VINS-Mono 提交（导入基线） |
+| --- | --- |
+| `main`（Ubuntu 22.04 / ROS 2 Humble） | [`ec59526549730b10cbab9428d79d4a211c718335`](https://github.com/Spaaaace-yyj/VINS-Mono/commit/ec59526549730b10cbab9428d79d4a211c718335) |
+| `ubuntu20.04`（Ubuntu 20.04 / ROS 2 Foxy） | [`c5884d0514749d88113b191bd89b0b0b5488b491`](https://github.com/Spaaaace-yyj/VINS-Mono/commit/c5884d0514749d88113b191bd89b0b0b5488b491) |
+
+迁移来源为 [Spaaaace-yyj/VINS-Mono](https://github.com/Spaaaace-yyj/VINS-Mono)，
+原始算法来自 [HKUST-Aerial-Robotics/VINS-Mono](https://github.com/HKUST-Aerial-Robotics/VINS-Mono)。
+原作者为 Tong Qin、Peiliang Li、Zhenfei Yang、Shaojie Shen（HKUST Aerial Robotics Group）。
+本次仅改变源码的 Git 管理方式，不合并两个版本，也不改动 VINS-Mono 算法、标定或资源文件。
+外层仓库已有提交历史保留；迁移没有导入子仓库的提交历史，旧子仓库也未被删除。
+
+### 许可与第三方声明
+
+VINS-Mono 上游采用 **GNU GPLv3**；完整许可证保留在
+[`src/VINS-Mono/LICENCE`](src/VINS-Mono/LICENCE)，原说明保留在
+[`src/VINS-Mono/README.md`](src/VINS-Mono/README.md)。复制、修改或分发这部分代码时，
+请遵循其许可证，保留原有版权、许可和署名声明。学术使用请引用原始 VINS-Mono 论文，
+BibTeX 保留在 [`src/VINS-Mono/support_files/paper_bib.txt`](src/VINS-Mono/support_files/paper_bib.txt)。
+
+VINS-Mono 内含 camodocal、DBoW2、DUtils、DVision 等第三方代码；各文件原有声明完整保留，
+应同时查看相应文件头。例如
+[`DBoW2.h`](src/VINS-Mono/pose_graph/src/ThirdParty/DBoW/DBoW2.h)
+保留了 **CC BY-NC-SA 3.0** 声明，
+[`DUtils.h`](src/VINS-Mono/pose_graph/src/ThirdParty/DUtils/DUtils.h) 与
+[`DVision.h`](src/VINS-Mono/pose_graph/src/ThirdParty/DVision/DVision.h)
+保留了 **LGPLv3 或后续版本** 声明。本次迁移不改变这些文件的原有许可。
+本仓库其他包继续以各自的 `LICENSE`、`LICENCE`、`package.xml` 和文件头声明为准；
+本节不为所有代码统一指定新的许可证。
+
+### 已有子模块克隆的更新
+
+旧工作区中的子模块可能有尚未推送的修改、分支或标定文件。更新前先备份整个旧工作区，
+最稳妥的方式是在另一个目录重新克隆，再按需迁入自己的修改：
+
+```bash
+# Humble；也可使用 --branch ubuntu20.04 克隆 Foxy 版本
+git clone --branch main https://github.com/Spaaaace-yyj/RM_flying_robot_control.git RM_flying_robot_control-new
+```
+
+新克隆的两个分支均直接包含各自的 VINS-Mono 源码，无需初始化子模块。
