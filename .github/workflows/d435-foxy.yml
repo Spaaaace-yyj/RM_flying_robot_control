@@ -1,0 +1,59 @@
+name: D435 Foxy launch
+on:
+  push:
+    branches: [ubuntu20.04]
+    paths: ['src/d435_bringup/**', '.github/workflows/d435-foxy.yml']
+  pull_request:
+    branches: [ubuntu20.04]
+    paths: ['src/d435_bringup/**', '.github/workflows/d435-foxy.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  launch-check:
+    name: CMake ${{ matrix.cmake }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cmake: [system, '4.4.3']
+    runs-on: ubuntu-latest
+    container: ros:foxy-ros-base-focal
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      ROS_DOMAIN_ID: '72'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Foxy camera driver and launch dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /tmp/ros.key
+          gpg --dearmor --yes -o /usr/share/keyrings/ros-archive-keyring.gpg /tmp/ros.key
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake \
+            python3-colcon-common-extensions python3-yaml \
+            ros-foxy-realsense2-camera ros-foxy-diagnostic-updater
+      - name: Install CMake 4.4.3
+        if: matrix.cmake == '4.4.3'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-linux-x86_64.tar.gz -o /tmp/cmake.tar.gz
+          echo 'd6c83076c575bc00b823522ac974bda66d0af05d6ddc30e739c12385cf32c6cc  /tmp/cmake.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/cmake.tar.gz -C /opt
+          echo '/opt/cmake-4.4.3-linux-x86_64/bin' >> "$GITHUB_PATH"
+      - name: Build, test parameter transport, and inspect installed launch
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/foxy/setup.bash
+          cmake --version
+          colcon build --base-paths src/d435_bringup --cmake-args -DBUILD_TESTING=ON
+          source install/setup.bash
+          colcon test --packages-select d435_bringup --event-handlers console_direct+
+          colcon test-result --verbose
+          ros2 launch d435_bringup d435.launch.py --show-args
+          ros2 pkg executables realsense2_camera

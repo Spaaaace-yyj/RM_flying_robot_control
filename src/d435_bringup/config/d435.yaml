@@ -1,0 +1,86 @@
+# D435 / Ubuntu 20.04 / ROS 2 Foxy
+# 本文件使用平铺键名，由 d435.launch.py 读取。
+# 没有列出的参数继续使用当前已安装驱动和相机的默认值。
+
+# ---------- 启动选项 ----------
+# auto 检查已安装驱动的参数接口；可指定 legacy / profile / split。
+driver_api: "auto"
+# 默认节点：/camera/camera；camera_name 也用于构造相机 TF 名称。
+camera_name: "camera"
+camera_namespace: "camera"
+log_level: "info"
+output: "screen"
+
+# ---------- 设备选择 ----------
+# 空字符串表示不按该条件筛选。多个相机时填写序列号，必须保留引号。
+serial_no: ""
+usb_port_id: ""
+device_type: ""
+initial_reset: false
+wait_for_device_timeout: -1.0
+reconnect_timeout: 6.0
+json_file_path: ""
+
+# ---------- 数据流 ----------
+enable_color: true
+enable_depth: true
+enable_infra: false
+enable_infra1: true
+enable_infra2: true
+# 普通 D435 没有 IMU。
+enable_gyro: false
+enable_accel: false
+enable_rgbd: false
+
+# ---------- 分辨率、帧率、格式 ----------
+depth_module.depth_profile: "848x480x90"
+depth_module.infra_profile: "848x480x90"
+depth_module.depth_format: "Z16"
+depth_module.infra1_format: "Y8"
+depth_module.infra2_format: "Y8"
+# 只有 enable_color 为 true 时，下面的彩色配置才用于启动彩色流。
+rgb_camera.color_profile: "848x480x60"
+rgb_camera.color_format: "RGB8"
+rgb_camera.enable_auto_exposure: true
+
+# ---------- 深度/红外成像 ----------
+# 自动曝光开启时，实际曝光和增益由相机自动调整。
+depth_module.enable_auto_exposure: true
+depth_module.exposure: 8500
+depth_module.gain: 16
+# 1：开启红外散斑；0：关闭。先保持深度采集配置，做 VINS 时可比较关闭效果。
+depth_module.emitter_enabled: 1
+
+# ---------- 帧同步 ----------
+# 相机内部数据流配对；不会自动同步外部 PX4 IMU。
+enable_sync: false
+depth_module.inter_cam_sync_mode: 0
+
+# ---------- 图像后处理 ----------
+# 深度对齐到 RGB 需要同时开启 RGB；本配置沿用 main，保持开启。
+align_depth.enable: true
+colorizer.enable: false
+decimation_filter.enable: false
+spatial_filter.enable: false
+temporal_filter.enable: false
+disparity_filter.enable: false
+hole_filling_filter.enable: false
+hdr_merge.enable: false
+
+# ---------- 点云 ----------
+pointcloud.enable: true
+# 无 RGB 时，若要开启无纹理点云，可同时保留下面的设置。
+pointcloud.stream_filter: 1
+pointcloud.stream_index_filter: 1
+pointcloud.allow_no_texture_points: true
+pointcloud.ordered_pc: false
+
+# ---------- ROS 输出 ----------
+publish_tf: true
+tf_publish_rate: 0.0
+diagnostics_period: 0.0
+use_sim_time: false
+# 可改为 SENSOR_DATA；订阅端的 QoS 必须兼容。
+depth_qos: "SYSTEM_DEFAULT"
+infra1_qos: "SYSTEM_DEFAULT"
+infra2_qos: "SYSTEM_DEFAULT"

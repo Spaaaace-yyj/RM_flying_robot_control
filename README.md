@@ -388,3 +388,29 @@ ROS 2 移植来源为 [yangfuyuan/vins_fusion_ros2](https://github.com/yangfuyua
 原始算法来自 [HKUST-Aerial-Robotics/VINS-Fusion](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion)。
 GPLv3 许可证完整保留在 [`src/vins_fusion_ros2/LICENCE`](src/vins_fusion_ros2/LICENCE)，
 原作者与第三方版权声明保留在源码和包内 README；本次移植不改变其原有许可。
+
+## D435 / D430 系列相机启动（Foxy）
+
+`src/d435_bringup` 已从 `main` 移植到本分支，适配 ROS 2 Foxy 和 CMake 4.4.3。
+包名和入口仍是 `d435_bringup` / `d435.launch.py`，依赖官方 `realsense2_camera`。
+
+```bash
+source /opt/ros/foxy/setup.bash
+sudo apt install ros-foxy-realsense2-camera ros-foxy-diagnostic-updater python3-yaml
+colcon build --packages-select d435_bringup --cmake-clean-cache
+source install/setup.bash
+ros2 launch d435_bringup d435.launch.py
+# 修改源目录配置并显式加载：
+ros2 launch d435_bringup d435.launch.py \
+  config_file:=$PWD/src/d435_bringup/config/d435.yaml
+```
+
+默认保留主分支实际 YAML：深度/左右红外 848×480×90，RGB 848×480×60，点云及深度对齐开启。
+驱动版本对应的参数接口自动识别；兼容 3.x 的旧规格参数、早期 4.x 共用 profile 和较新
+驱动的分开 profile。可通过 `driver_api:=legacy/profile/split` 中的一个实际值手动指定。
+数字串行号、空字符串等通过参数文件保持类型，避免 Foxy launch 的字符串推断差异。
+
+如用于刚才的 VINS 双目标定，请自行在配置中关闭不需要的 RGB、点云、对齐等功能，并设置
+适合采集的帧率。左右图像的话题随驱动版本而异，应先检查 `ros2 topic list` 再填入 VINS 配置。
+详细参数、驱动接口差异和检查范围见 [d435_bringup 说明](src/d435_bringup/README.md)。
+包的 MIT 许可证保留在 [LICENSE](src/d435_bringup/LICENSE)。
