@@ -282,3 +282,88 @@ git clone --branch ubuntu20.04 https://github.com/Spaaaace-yyj/RM_flying_robot_c
 ```
 
 新克隆的两个分支均直接包含各自的 VINS-Mono 源码，无需初始化子模块。
+
+
+## VINS-Fusion：Ubuntu 20.04 / ROS 2 Foxy
+
+本分支新增 `src/vins_fusion_ros2`，从 `main` 的 `d986621` 中已有的
+VINS-Fusion 源码移植（导入目录基线 `7338c212abd0e8c38315d8d272bbf136ce1d6529`）。
+它是普通源码目录，由外层 Git 管理。原有 Foxy 相机、接口与 VINS-Mono 版本保持不变。
+
+### 依赖与编译
+
+目标环境为 Ubuntu 20.04、ROS 2 Foxy、GCC 9、C++14；使用系统 OpenCV 4.2、
+Ceres 1.14、Eigen 3.3.7 和 glog，不要求源码安装 Humble 使用的 Ceres 2.1 / Eigen 3.3.9。
+默认使用 CPU；`use_gpu` 和 `use_gpu_acc_flow` 均应为 `0`。
+原参数 `use_gpu_ceres` 只选择 `DENSE_QR` / `DENSE_SCHUR`，本代码没有启用 Ceres CUDA 后端。
+
+```bash
+source /opt/ros/foxy/setup.bash
+sudo apt update
+sudo apt install -y \
+  build-essential cmake python3-colcon-common-extensions \
+  libopencv-dev libceres-dev libeigen3-dev libgoogle-glog-dev libboost-filesystem-dev \
+  ros-foxy-cv-bridge ros-foxy-image-transport ros-foxy-message-filters \
+  ros-foxy-tf2-ros ros-foxy-rcpputils ros-foxy-ament-cmake-gtest
+# 也可让 rosdep 按此包的 package.xml 安装依赖
+rosdep install --from-paths src/vins_fusion_ros2 --ignore-src --rosdistro foxy -y
+colcon build --packages-select vins_fusion_ros2 \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+```
+
+切换 Humble/Foxy 或使用不同 OpenCV/Ceres 后，应使用新的工作区或清理该包旧的
+构建缓存再编译，不要混用之前的 `build/`、`install/`。只编译此包不会启动相机或飞控。
+
+### 启动与参数
+
+```bash
+# 实机：使用你已完成双目标定、相机-IMU标定的 OpenCV YAML
+ros2 launch vins_fusion_ros2 vins_fusion_ros2.launch.py \
+  config_file:=/绝对路径/你的配置.yaml use_sim_time:=false
+
+# EuRoC 等 ROS 2 bag：默认配置为包内 EuRoC 双目+IMU示例
+ros2 launch vins_fusion_ros2 vins_fusion_ros2.launch.py use_sim_time:=true
+# 另一个已 source 工作区的终端
+ros2 bag play /绝对路径/你的ROS2_bag --clock
+```
+
+`config_file` 为 VINS 的 OpenCV YAML，不是 ROS 节点参数 YAML；相机标定文件的相对路径
+以该 YAML 所在目录为基准，也支持绝对路径。`output_path` 支持 `~/`，会创建目录并检查
+写入权限；启动时会重新创建 `vio.csv`，需要保留的旧结果应先另存。
+`use_sim_time` 默认为 `false`，可通过 launch 设置
+`world_frame_id` / `body_frame_id` / `camera_frame_id`（默认 `world` / `body` / `camera`）。
+
+输入由 YAML 中的 `image0_topic` / `image1_topic` / `imu_topic` 决定；图像和 IMU 均使用
+Best Effort 订阅，可接收 Reliable 或 Best Effort 发布端。支持双目+IMU、单目+IMU及纯双目。
+对于你的 D435 + PX4 IMU，应配置 `imu: 1`、`num_of_cam: 2`、正确的左右红外话题与
+`imu_topic`，并使用你自己的时序、噪声及外参标定。上游名为
+`realsense_stereo_imu_config.yaml` 的示例实际写了 `imu: 0`，不能仅根据文件名判断模式。
+
+当前节点输出 `/odometry`、`/imu_propagate`、`/path`、`/image_track` 等话题及
+world→body→camera TF。这里迁移的是 VIO 节点；PX4 接口使用时应按实际输出话题配置桥接。
+
+### Foxy 适配与检查
+
+- 使用原生 rclcpp 订阅与 `SimpleFilter` 转发双目图像，保持同一图像回调组，避开 Foxy
+  `message_filters::Subscriber` 不支持 `SubscriptionOptions` 的接口差异。
+- 修正 ROS 2 消息头文件、补齐包依赖、显式链接线程/Boost，并把共享库安装到标准 `lib/`。
+- 估计器开始接收数据前初始化状态；失败恢复使用已持锁的重置函数，避免重复锁定。
+- 检查配置、相机数量、标定路径和输出目录；外部特征消息缺少通道或通道过短时丢弃，避免越界。
+
+```bash
+colcon test --packages-select vins_fusion_ros2 --event-handlers console_direct+
+colcon test-result --verbose
+```
+
+`.github/workflows/vins-fusion-foxy.yml` 在真实 Focal/Foxy 容器中构建共享库，运行转换测试，
+并通过 Best Effort 合成图像/IMU检查三种模式的数据接收、跟踪图像输出和正常退出；另外
+通过安装目录运行 launch，检查参数解析和共享库加载。合成数据检查不等于实机精度、
+EuRoC轨迹精度或无人机飞行验收。
+
+### VINS-Fusion 来源与许可
+
+ROS 2 移植来源为 [yangfuyuan/vins_fusion_ros2](https://github.com/yangfuyuan/vins_fusion_ros2)，
+原始算法来自 [HKUST-Aerial-Robotics/VINS-Fusion](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion)。
+GPLv3 许可证完整保留在 [`src/vins_fusion_ros2/LICENCE`](src/vins_fusion_ros2/LICENCE)，
+原作者与第三方版权声明保留在源码和包内 README；本次移植不改变其原有许可。

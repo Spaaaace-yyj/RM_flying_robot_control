@@ -1,0 +1,70 @@
+name: VINS-Fusion Foxy
+on:
+  push:
+    branches: [ubuntu20.04]
+    paths:
+      - 'src/vins_fusion_ros2/**'
+      - '.github/workflows/vins-fusion-foxy.yml'
+  pull_request:
+    branches: [ubuntu20.04]
+    paths:
+      - 'src/vins_fusion_ros2/**'
+      - '.github/workflows/vins-fusion-foxy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    container: ros:foxy-ros-base-focal
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      ROS_DOMAIN_ID: '71'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Focal and Foxy dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Refresh the ROS key in old Foxy images; keep apt signature checks on.
+          curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /tmp/ros.key
+          gpg --dearmor --yes -o /usr/share/keyrings/ros-archive-keyring.gpg /tmp/ros.key
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake python3-colcon-common-extensions \
+            libceres-dev libeigen3-dev libgoogle-glog-dev libopencv-dev libboost-filesystem-dev \
+            ros-foxy-cv-bridge ros-foxy-image-transport ros-foxy-message-filters \
+            ros-foxy-tf2-ros ros-foxy-rcpputils ros-foxy-ament-cmake-gtest
+          dpkg-query -W gcc g++ cmake libceres-dev libeigen3-dev libopencv-dev ros-foxy-rclcpp
+      - name: Build against system Ceres and OpenCV, including shared library install
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/foxy/setup.bash
+          colcon build --base-paths src/vins_fusion_ros2 --executor sequential \
+            --event-handlers console_direct+ --cmake-args \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=ON
+      - name: Conversion and sensor integration tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/foxy/setup.bash
+          source install/setup.bash
+          colcon test --packages-select vins_fusion_ros2 --event-handlers console_direct+
+          colcon test-result --verbose
+      - name: Installed launch and runtime linking
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/foxy/setup.bash
+          source install/setup.bash
+          ros2 launch vins_fusion_ros2 vins_fusion_ros2.launch.py --show-args
+          prefix=$(ros2 pkg prefix vins_fusion_ros2)
+          ldd "$prefix/lib/vins_fusion_ros2/vins_fusion_ros2_node"
+          python3 src/vins_fusion_ros2/test/smoke_test.py \
+            "$prefix/lib/vins_fusion_ros2/vins_fusion_ros2_node" \
+            "$prefix/share/vins_fusion_ros2" --launch
