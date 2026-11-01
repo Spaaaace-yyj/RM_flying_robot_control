@@ -1,5 +1,6 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16...3.22)
 project(vins)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/foxy_compat.cmake)
 set(CMAKE_CXX_STANDARD 14)
 add_compile_options(-Wextra -Wpedantic)
 
@@ -10,7 +11,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(Glog REQUIRED)
 find_package(Threads REQUIRED)
-find_package(Boost REQUIRED COMPONENTS filesystem)
+find_package(Boost 1.71 CONFIG REQUIRED COMPONENTS filesystem)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV 4 REQUIRED)
 find_package(Ceres 1.14 REQUIRED)

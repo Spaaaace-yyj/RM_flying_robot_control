@@ -15,6 +15,11 @@ permissions:
   contents: read
 jobs:
   build-and-smoke:
+    name: CMake ${{ matrix.cmake }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cmake: [system, '4.4.3']
     runs-on: ubuntu-latest
     container: ros:foxy-ros-base-focal
     timeout-minutes: 30
@@ -40,11 +45,21 @@ jobs:
             ros-foxy-cv-bridge ros-foxy-image-transport ros-foxy-message-filters \
             ros-foxy-tf2-ros ros-foxy-rcpputils ros-foxy-ament-cmake-gtest
           dpkg-query -W gcc g++ cmake libceres-dev libeigen3-dev libopencv-dev ros-foxy-rclcpp
+      - name: Install CMake 4.4.3
+        if: matrix.cmake == '4.4.3'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-linux-x86_64.tar.gz -o /tmp/cmake.tar.gz
+          echo 'd6c83076c575bc00b823522ac974bda66d0af05d6ddc30e739c12385cf32c6cc  /tmp/cmake.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/cmake.tar.gz -C /opt
+          echo '/opt/cmake-4.4.3-linux-x86_64/bin' >> "$GITHUB_PATH"
       - name: Build against system Ceres and OpenCV, including shared library install
         shell: bash
         run: |
           set -eo pipefail
           source /opt/ros/foxy/setup.bash
+          cmake --version
           colcon build --base-paths src/vins_fusion_ros2 --executor sequential \
             --event-handlers console_direct+ --cmake-args \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=ON

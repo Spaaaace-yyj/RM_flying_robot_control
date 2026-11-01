@@ -315,6 +315,26 @@ source install/setup.bash
 切换 Humble/Foxy 或使用不同 OpenCV/Ceres 后，应使用新的工作区或清理该包旧的
 构建缓存再编译，不要混用之前的 `build/`、`install/`。只编译此包不会启动相机或飞控。
 
+### CMake 3.16 / 4.4.3 兼容
+
+该包支持 Ubuntu 20.04 自带的 CMake 3.16 和 CMake 4.4.3，不需要降级 CMake。
+两层 `CMakeLists.txt` 使用 `3.16...3.22` 声明包自身的策略版本；CMake 4 下通过
+`cmake/foxy_compat.cmake` 为旧的外部依赖设置最低策略版本 `3.5`，避免 Focal/Foxy
+依赖中低于 3.5 的声明被拒绝。该设置只作用于本包配置目录及其依赖，不强制覆盖用户
+更高的策略下限，也不修改系统安装的依赖文件。Boost 使用 Focal 的 1.71 配置包，
+不再依赖新 CMake 中已弃用的 `FindBoost` 模块。
+
+更新后清理这个包的 CMake 缓存，再单独编译：
+
+```bash
+source /opt/ros/foxy/setup.bash
+colcon build --packages-select vins_fusion_ros2 --cmake-clean-cache \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+```
+
+这里的兼容修改仅针对 `vins_fusion_ros2`；工作区中其他包需要另行检查自己的构建配置。
+
 ### 启动与参数
 
 ```bash
@@ -356,7 +376,8 @@ colcon test --packages-select vins_fusion_ros2 --event-handlers console_direct+
 colcon test-result --verbose
 ```
 
-`.github/workflows/vins-fusion-foxy.yml` 在真实 Focal/Foxy 容器中构建共享库，运行转换测试，
+`.github/workflows/vins-fusion-foxy.yml` 分别使用系统 CMake 3.16 和 CMake 4.4.3，
+在真实 Focal/Foxy 容器中构建共享库，运行转换测试，
 并通过 Best Effort 合成图像/IMU检查三种模式的数据接收、跟踪图像输出和正常退出；另外
 通过安装目录运行 launch，检查参数解析和共享库加载。合成数据检查不等于实机精度、
 EuRoC轨迹精度或无人机飞行验收。
