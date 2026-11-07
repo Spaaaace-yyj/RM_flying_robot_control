@@ -1,3 +1,21 @@
+# Build the agent against Humble's Fast DDS separately from the application.
+FROM ros:humble-ros-base-jammy AS xrce-agent
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+WORKDIR /tmp/xrce_ws
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential ca-certificates cmake git python3-colcon-common-extensions \
+      ros-humble-fastcdr ros-humble-fastrtps && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch v2.4.2 \
+      https://github.com/eProsima/Micro-XRCE-DDS-Agent.git src/agent && \
+    source /opt/ros/humble/setup.bash && \
+    CMAKE_BUILD_PARALLEL_LEVEL=4 MAKEFLAGS=-j4 \
+    colcon build --merge-install --install-base /opt/xrce-agent \
+      --packages-select microxrcedds_agent --event-handlers console_direct+ \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release
+
 FROM ros:humble-ros-base-jammy
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -43,14 +61,21 @@ RUN source /opt/ros/humble/setup.bash && \
         -DPython3_EXECUTABLE=/usr/bin/python3 && \
     rm -rf /ws/build /ws/log
 
+COPY --from=xrce-agent /opt/xrce-agent /opt/xrce-agent
+
 # docker run 时自动加载 Humble 和项目工作空间。
 RUN printf '%s\n' \
       '#!/bin/bash' \
       'set -e' \
       'source /opt/ros/humble/setup.bash' \
+      'source /opt/xrce-agent/local_setup.bash' \
       'source /ws/install/setup.bash' \
       'exec "$@"' > /ws/entrypoint.sh && \
     chmod +x /ws/entrypoint.sh
+
+# Check the executable and its runtime dependencies in the final image.
+RUN /ws/entrypoint.sh bash -c 'agent=$(command -v MicroXRCEAgent) && \
+    libs=$(ldd "$agent") && echo "$libs" && [[ "$libs" != *"not found"* ]]'
 
 ENTRYPOINT ["/ws/entrypoint.sh"]
 CMD ["bash"]
