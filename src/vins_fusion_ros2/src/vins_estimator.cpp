@@ -42,7 +42,7 @@ void VinsEstimator::initializeSubscribers() {
 
   if (options->hasImu()) {
     auto imu = this->create_subscription<sensor_msgs::msg::Imu>(
-        options->imuTopic(), rclcpp::QoS(rclcpp::KeepLast(100)),
+        options->imuTopic(), rclcpp::QoS(rclcpp::KeepLast(100)).best_effort(),
         [this](const sensor_msgs::msg::Imu::SharedPtr msg) {
           auto imu_msg = fromMsg(*msg);
           estimator_->inputIMU(imu_msg);

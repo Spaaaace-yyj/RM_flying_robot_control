@@ -8,7 +8,7 @@ def generate_launch_description():
         get_package_share_directory('vins_fusion_ros2'),
         'config',
         'euroc',
-        'euroc_stereo_imu_config.yaml'
+        'euroc_d435_imu_config.yaml'
     )
 
     return LaunchDescription([
