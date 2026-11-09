@@ -1,0 +1,32 @@
+name: rm-flight
+
+services:
+  rm-dev:
+    # Created locally from rm-dev-v2 before deleting the old container.
+    image: rm-flight:humble-arm64-v3
+    pull_policy: never
+    container_name: rm-dev-v2
+
+    network_mode: host
+    ipc: private
+    entrypoint: ["/ws/entrypoint.sh"]
+    command: ["sleep", "infinity"]
+
+    volumes:
+      - type: bind
+        source: /dev
+        target: /dev
+      - type: bind
+        source: /run/udev
+        target: /run/udev
+        read_only: true
+      - type: bind
+        source: /home/radxa/Code/RM_flying_robot_control/src
+        target: /ws/src
+
+    device_cgroup_rules:
+      - "c 189:* rw"  # USB bus devices
+      - "c 81:* rw"   # Video devices
+      - "c 188:* rw"  # ttyUSB serial ports
+      - "c 166:* rw"  # ttyACM serial ports
+      - "c 242:* rw"  # ttyAS serial ports on this A7Z kernel
