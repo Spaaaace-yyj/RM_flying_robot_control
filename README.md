@@ -39,7 +39,7 @@
 | `src/mindvision_camera` | 迈德威视工业相机驱动；输出格式/帧率/QoS 可配，直接输出 `mono8` |
 | `src/driver_interface` | 图像灰度桥接（可关闭）+ PX4 `SensorCombined` → `sensor_msgs/Imu` |
 | `src/px4_hover` | VINS → PX4 外部定位桥接、就绪检查、显式起飞/接管/降落状态机 |
-| `src/bringup` | 总启动包：`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
+| `src/bringup` | 总启动包：`localization`、`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
 | `src/px4_msgs` | PX4 v1.14 消息定义（以源码 vendored，非子模块） |
 | `src/VINS-Mono` | 普通源码目录，由外层 Git 直接管理；ROS 2 移植版，导入自 `ec59526` |
 | `Camera/` | 相机录制数据（`.mvdat`，被 `.gitignore` 忽略） |
@@ -445,6 +445,67 @@ ros2 topic hz /px4/imu
 - 保留已有硬件时间戳映射（相机 tick 单位 0.1 毫秒），不会用发布时间重打时间戳。
   这仍是首帧到达时间锚定，不等于相机与 IMU 硬件同步；`timestamp_mode`、标定
   `td` 与 IMU 坐标变换仍需使用已验证设置。更改曝光、翻转、分辨率后重新验证标定。
+
+### 7.3 D435 + PX4 IMU + VINS-Fusion 定位
+
+`localization.launch.py` 一次启动以下组件：
+
+- `bringup/px4_xrce_agent.launch.py`：串口 MicroXRCEAgent。
+- `driver_interface/driver_interface.launch.py`：将 PX4 IMU 转为 `/px4/imu`。
+- `d435_bringup/d435.launch.py`：D435 相机。
+- `vins_fusion_ros2_node`：双目 + IMU 定位。
+
+入口仅接受 `config_file`，串口参数和各组件配置路径都从
+`src/bringup/config/localization.yaml` 读取，不在 launch 中覆盖相机、IMU
+或 VINS 的标定参数。此入口启动定位，不启动悬停管理器、回环或 RViz。
+
+| 配置位置 | 内容 |
+| --- | --- |
+| `bringup/config/localization.yaml` → `px4_agent` | 串口设备、波特率；当前为 `/dev/ttyAS4`、`1500000` |
+| `bringup/config/driver_interface.yaml` | PX4 IMU 输入、输出、时间戳和坐标系；默认关闭图像桥接 |
+| `d435_bringup/config/d435.yaml` | 相机流、分辨率、帧率、曝光和 QoS |
+| `vins_fusion_ros2/config/euroc/euroc_d435_imu_config.yaml` | 图像/IMU 话题、双目内外参引用和 VINS 参数 |
+| `bringup/config/localization.yaml` → `vins_fusion.use_sim_time` | 默认 `false`，使用实机时间 |
+
+串口值沿用现有 agent launch 的默认设置，需与飞控一致。相机和 IMU 参数保持
+各自文件中的设置；VINS 的 `cam0_calib`、`cam1_calib` 继续相对于其配置文件解析。
+当前相机配置与 VINS 配置均使用 848×480，左右图像话题为
+`/camera/camera/infra1/image_rect_raw`、`/camera/camera/infra2/image_rect_raw`。
+
+已有环境安装好相机、接口和 VINS-Fusion 后，只需编译新增入口所在包：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+colcon build --packages-select bringup --cmake-args -DBUILD_TESTING=OFF
+source install/setup.bash
+ros2 launch bringup localization.launch.py
+```
+
+全新工作空间可使用 `colcon build --packages-up-to bringup` 构建所需依赖。
+Docker 中先进入容器并在 `/ws` 执行上述编译、启动命令；只修改源码挂载目录后，
+普通非 symlink 安装需要重新编译 `bringup`，才会更新安装目录中的 launch/YAML。
+
+也可以维护自己的总配置：
+
+```bash
+ros2 launch bringup localization.launch.py config_file:=/绝对路径/localization.yaml
+```
+
+总配置中各组件的 `config_file` 可用绝对路径（支持 `~` 和环境变量），或用
+`config_package` + 包 share 内相对路径。省略 `config_package` 或设为空字符串时，
+相对路径以总配置所在目录为基准。修改源码中的相机/VINS 参数而不想重新安装时，
+可在总配置里直接引用 `/ws/src/...` 下的 YAML。启动日志会显示解析后的总配置路径。
+
+启动后检查数据链路：
+
+```bash
+ros2 topic hz /fmu/out/sensor_combined
+ros2 topic hz /px4/imu
+ros2 topic hz /camera/camera/infra1/image_rect_raw
+ros2 topic hz /camera/camera/infra2/image_rect_raw
+ros2 node info /vins_fusion_ros2_node
+```
 
 ## 8. mindvision_camera：相机驱动
 

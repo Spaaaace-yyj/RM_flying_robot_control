@@ -1,0 +1,26 @@
+# PX4 串口 + D435 双目 + PX4 IMU 转换 + VINS-Fusion 定位。
+# ros2 launch bringup localization.launch.py
+# 所有运行参数由本文件及下面引用的各组件 YAML 提供。
+
+px4_agent:
+  # 沿用 px4_xrce_agent.launch.py 当前默认值；须与 PX4 串口设置一致。
+  device: "/dev/ttyAS4"
+  baud: 1500000
+
+# config_file 为相对路径时：
+# - config_package 非空：相对于该 ROS 包的 share 目录。
+# - config_package 为空或省略：相对于本 localization.yaml 所在目录。
+# config_file 为绝对路径时直接使用，支持 ~ 和环境变量。
+driver_interface:
+  config_package: "bringup"
+  config_file: "config/driver_interface.yaml"
+
+d435:
+  config_package: "d435_bringup"
+  config_file: "config/d435.yaml"
+
+vins_fusion:
+  config_package: "vins_fusion_ros2"
+  config_file: "config/euroc/euroc_d435_imu_config.yaml"
+  # 实机不依赖 /clock；相机的 use_sim_time 仍由 d435.yaml 设置。
+  use_sim_time: false
