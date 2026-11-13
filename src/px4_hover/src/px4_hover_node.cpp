@@ -54,9 +54,9 @@ namespace px4_hover
     public:
         HoverNode() : Node("px4_hover")
         {
-            //VINS用IMU前向预测的里程计话题
+            //VINS 的 IMU 前向传播状态，作为外部定位的主要来源
             state_topic_ = parameter<std::string>("vins_state_topic", "/vins_estimator/imu_propagate");
-            //VINS最后输出的里程计话题
+            //VINS最后输出的里程计话题，检查视觉后端是否仍在更新
             backend_topic_ = parameter<std::string>("vins_backend_topic", "/vins_estimator/odometry");
             //VINS视觉失效重置后发布标志位
             restart_topic_ = parameter<std::string>("vins_restart_topic", "/feature_tracker/restart");
@@ -125,18 +125,21 @@ namespace px4_hover
             gate_ = VioGate(vio_config_);
             alignment_ = Alignment(mounting_);
 
-            mode_topic_ = ns + "/in/offboard_control_mode";
             visual_pub_ = create_publisher<VehicleOdometry>(ns + "/in/vehicle_visual_odometry", 10);
+            mode_topic_ = ns + "/in/offboard_control_mode";
             mode_pub_ = create_publisher<OffboardControlMode>(mode_topic_, 10); //心跳数据
             setpoint_pub_ = create_publisher<TrajectorySetpoint>(ns + "/in/trajectory_setpoint", 10);
             command_pub_ = create_publisher<VehicleCommand>(ns + "/in/vehicle_command", 10);
             diagnostic_pub_ = create_publisher<std_msgs::msg::String>("~/status", 10);
             const auto qos = rclcpp::SensorDataQoS();
+            //VINS 的 IMU 前向传播状态，作为外部定位的主要来源
             subscribe<VinsOdom>(state_topic_, qos, [this](VinsOdom::ConstSharedPtr m) { onVio(*m); });
+            //检查视觉后端是否仍在更新
             subscribe<VinsOdom>(backend_topic_, qos, [this](VinsOdom::ConstSharedPtr m)
             {
                 gate_.backend(stampSeconds(m->header.stamp), steadySeconds(), rosSeconds());
             });
+            //VINS视觉失效重置后发布标志位
             subscribe<std_msgs::msg::Bool>(restart_topic_, rclcpp::QoS(10),
                                            [this](std_msgs::msg::Bool::ConstSharedPtr m)
                                            {
@@ -146,6 +149,7 @@ namespace px4_hover
                                                        "feature_tracker restarted; disarmed reset required");
                                                }
                                            });
+            //飞机解锁、飞行模式、failsafe 等状态
             subscribe<VehicleStatus>(ns + "/out/vehicle_status", qos, [this](VehicleStatus::ConstSharedPtr m)
             {
                 if (last_status_stamp_ && m->timestamp < *last_status_stamp_)
@@ -158,8 +162,11 @@ namespace px4_hover
                 status_ = m;
                 status_rx_ = steadySeconds();
             });
+
+            //PX4 融合后的位置、速度、heading 和重置计数
             subscribe<VehicleLocalPosition>(ns + "/out/vehicle_local_position", qos,
                                             [this](VehicleLocalPosition::ConstSharedPtr m) { onLocal(m); });
+            //用于 VINS 与 PX4 的初始航向对齐
             subscribe<VehicleAttitude>(ns + "/out/vehicle_attitude", qos, [this](VehicleAttitude::ConstSharedPtr m)
             {
                 try
@@ -173,17 +180,20 @@ namespace px4_hover
                     /* Invalid attitude cannot establish alignment. */
                 }
             });
+            //检查 DDS 时间同步状态
             subscribe<TimesyncStatus>(ns + "/out/timesync_status", qos, [this](TimesyncStatus::ConstSharedPtr m)
             {
                 sync_ = m;
                 sync_rx_ = steadySeconds();
             });
+            //检查 PX4 是否正在融合外部视觉
             subscribe<EstimatorStatusFlags>(ns + "/out/estimator_status_flags", qos,
                                             [this](EstimatorStatusFlags::ConstSharedPtr m)
                                             {
                                                 ev_ = m;
                                                 ev_rx_ = steadySeconds();
                                             });
+            //检查模式切换、解锁等命令的回应
             subscribe<VehicleCommandAck>(ns + "/out/vehicle_command_ack", qos,
                                          [this](VehicleCommandAck::ConstSharedPtr m)
                                          {
@@ -211,6 +221,7 @@ namespace px4_hover
         }
 
     private:
+        //声明参数并且读取参数，设置为只读
         template <class T>
         T parameter(const std::string& name, const T& initial)
         {
@@ -219,6 +230,7 @@ namespace px4_hover
             return declare_parameter<T>(name, initial, descriptor);
         }
 
+        //要求参数是有限的正数
         double positiveParameter(const std::string& name, double initial)
         {
             const double value = parameter<double>(name, initial);
@@ -229,6 +241,7 @@ namespace px4_hover
             return value;
         }
 
+        //要求系统或组件编号处于1-255
         uint8_t idParameter(const std::string& name, int64_t initial)
         {
             const auto value = parameter<int64_t>(name, initial);
@@ -236,12 +249,14 @@ namespace px4_hover
             return static_cast<uint8_t>(value);
         }
 
+        //创建订阅者并且保存对象，维持订阅者的生命周期
         template <class Message, class Callback>
         void subscribe(const std::string& topic, const rclcpp::QoS& qos, Callback callback)
         {
             subscriptions_.push_back(create_subscription<Message>(topic, qos, std::move(callback)));
         }
 
+        //把内部的检查结果转换成ROS2服务响应
         void service(const char* name, std::function<Check()> callback)
         {
             services_.push_back(create_service<Trigger>(name,
@@ -289,17 +304,23 @@ namespace px4_hover
             local_counters_ = counters;
         }
 
+        //接收VINS里程计消息，转换成可以发送给PX4的状态
         void onVio(const VinsOdom& m)
         {
+            //检查时钟状态，如果时钟故障直接忽略
             if (!clock_guard_.empty()) { return; }
+            //从消息中取出时间戳，位置姿态和线速度
             const double now = steadySeconds(), ros_now = rosSeconds(), sample = stampSeconds(m.header.stamp);
             const auto& p = m.pose.pose.position;
             const auto& q = m.pose.pose.orientation;
             const auto& v = m.twist.twist.linear;
             const Vec3 position(p.x, p.y, p.z), velocity(v.x, v.y, v.z);
             const std::array<double, 4> orientation{q.x, q.y, q.z, q.w};
+            //使用gate检查
             if (!gate_.accept(sample, position, orientation, velocity, m.header.frame_id, now, ros_now)) { return; }
+            //检查四元数合法
             const auto imu_orientation = checkedQuaternion(orientation);
+            //如果尚未建立坐标对齐，寻找时间匹配的 PX4 姿态
             if (!alignment_.initialized())
             {
                 if (attitudes_.empty() || !timeReady(now, ros_now)) { return; }
@@ -316,10 +337,12 @@ namespace px4_hover
                     anchor = Vec3(local_->x, local_->y, local_->z);
                 }
                 if (!anchor.allFinite()) { return; }
-                alignment_.initialize(position, imu_orientation, nearest->orientation, anchor);
+                alignment_.initialize(position, imu_orientation, nearest->orientation, anchor);//计算航向修正和位置平移，然后冻结变换
                 RCLCPP_INFO(get_logger(), "Frozen VINS -> PX4 local yaw/origin alignment");
             }
-            last_vio_ = VioState{sample, alignment_.convert(position, imu_orientation, velocity, body_velocity_)};
+            //转换本次状态，保存到 last_vio_
+            last_vio_ = VioState{sample, alignment_.convert(position, imu_orientation, velocity, body_velocity_)};//转换位置、姿态和速度
+            //只更新缓存，不直接向飞控发布消息
         }
 
         Observation observation(double now, double ros_now) const
@@ -519,10 +542,15 @@ namespace px4_hover
             ConvertedState state;
         };
 
+        //定位检查的阈值参数
         VioConfig vio_config_;
+        //检查VINS数据的时效，连续，是否有效
         VioGate gate_;
+        //将VINS世界系转换到PX4局部坐标系
         Alignment alignment_;
+        //飞行状态管理
         Flight flight_;
+
         std::array<double, 4> mounting_{0., 0., 0., 1.};
         std::string state_topic_, backend_topic_, restart_topic_, mode_topic_, clock_guard_, last_print_;
         bool body_velocity_ = false, require_timesync_ = true, require_ev_status_ = true, require_ev_yaw_ = true;

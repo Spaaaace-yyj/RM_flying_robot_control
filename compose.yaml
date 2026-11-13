@@ -3,9 +3,9 @@ name: rm-flight
 services:
   rm-dev:
     # Created locally from rm-dev-v2 before deleting the old container.
-    image: rm-flight:humble-arm64-v3
+    image: rm-flight:humble-arm64-v4
     pull_policy: never
-    container_name: rm-dev-v2
+    container_name: rm-dev-v4
 
     network_mode: host
     ipc: private

@@ -47,6 +47,7 @@ namespace px4_hover
         bool initialized_ = false;
     };
 
+    //VIO定位检查的阈值参数
     struct VioConfig
     {
         double max_age = .3, backend_age = .8, max_speed = 8.;
@@ -59,12 +60,18 @@ namespace px4_hover
     {
     public:
         explicit VioGate(VioConfig config = {});
+        //清空历史、故障锁存和连续有效时间，增加重置计数
         void clear();
+        //锁存严重故障，必须 reset 才能解除
         void invalidate(const std::string& reason);
+        //接收视觉后端时间戳，检查是否更新
         bool backend(double stamp, double steady_now, double ros_now);
+        //检查一条新的 VINS 状态
         bool accept(double stamp, const Vec3& position, const std::array<double, 4>& xyzw,
                     const Vec3& velocity, const std::string& frame, double steady_now, double ros_now);
+        //判断定位是否达到接管要求
         Check health(double steady_now, double ros_now) const;
+        //判断当前状态是否可以发送给 PX4
         bool publishable(double sample, double steady_now, double ros_now) const;
         uint64_t resetCounter() const { return reset_counter_; }
         const std::string& latched() const { return latched_; }
@@ -105,6 +112,7 @@ namespace px4_hover
         void validate() const;
     };
 
+    //状态机看到的无人机状态
     struct Observation
     {
         bool healthy = false, status_fresh = false, armed = false, failsafe = false;

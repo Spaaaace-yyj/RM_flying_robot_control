@@ -36,6 +36,12 @@ namespace px4_hover
         }
     } // namespace
 
+    /**
+     *
+     * @brief 检查四元数是否合法：四个分量不是NaN或者Inf,并且范数落在[0.8, 1.2]，接近1
+     * @param xyzw
+     * @return 归一化后的四元数
+     */
     Quat checkedQuaternion(const std::array<double, 4>& xyzw)
     {
         for (double value : xyzw)
@@ -63,6 +69,7 @@ namespace px4_hover
     {
     }
 
+    //计算航向修正和位置平移，然后冻结变换
     void Alignment::initialize(const Vec3& position, const Quat& orientation,
                                const Quat& px4_body_to_ned, const Vec3& anchor)
     {
