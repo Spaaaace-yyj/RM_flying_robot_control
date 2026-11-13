@@ -39,7 +39,7 @@
 | `src/mindvision_camera` | 迈德威视工业相机驱动；输出格式/帧率/QoS 可配，直接输出 `mono8` |
 | `src/driver_interface` | 图像灰度桥接（可关闭）+ PX4 `SensorCombined` → `sensor_msgs/Imu` |
 | `src/px4_hover` | VINS → PX4 外部定位桥接、就绪检查、显式起飞/接管/降落状态机 |
-| `src/bringup` | 总启动包：`localization`、`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
+| `src/bringup` | 总启动包：`localization`、`hover_test`、`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
 | `src/px4_msgs` | PX4 v1.14 消息定义（以源码 vendored，非子模块） |
 | `src/VINS-Mono` | 普通源码目录，由外层 Git 直接管理；ROS 2 移植版，导入自 `ec59526` |
 | `Camera/` | 相机录制数据（`.mvdat`，被 `.gitignore` 忽略） |
@@ -506,6 +506,81 @@ ros2 topic hz /camera/camera/infra1/image_rect_raw
 ros2 topic hz /camera/camera/infra2/image_rect_raw
 ros2 node info /vins_fusion_ros2_node
 ```
+
+### 7.4 VINS-Fusion 悬停测试
+
+`hover_test.launch.py` 复用 `localization.launch.py` 启动 PX4 串口、IMU 接口、
+D435、VINS-Fusion，并复用 `px4_hover.launch.py` 启动悬停管理器。
+启动入口只接受一个 `config_file`，默认读取 `bringup/config/hover_test.yaml`：
+
+| 配置项 | 默认引用 |
+| --- | --- |
+| `localization` | `bringup/config/localization.yaml`，包含串口配置和相机/IMU/VINS 参数路径 |
+| `hover` | `px4_hover/config/px4_hover_vins_fusion.yaml`，包含 Fusion 订阅与悬停参数 |
+| `hover.use_sim_time` | `false`，使用实机时间 |
+
+路径解析方式与第 7.3 节相同。两个子 launch 的 `config_file` 独立作用，
+可以把定位与悬停配置分别替换成自己的文件。
+
+当前 Fusion 节点在根命名空间发布普通相对话题；节点名
+`vins_fusion_ros2_node` 不会自动成为这些话题的命名空间。专用悬停配置为：
+
+| 参数 | 值 | 用途 |
+| --- | --- | --- |
+| `vins_state_topic` | `/imu_propagate` | IMU 前向传播状态，向 PX4 提供连续外部定位 |
+| `vins_backend_topic` | `/odometry` | 检查视觉后端是否持续产生新时间戳 |
+| `vins_restart_topic` | 空字符串 | 此 Fusion 移植未发布重启 Bool，关闭该可选订阅 |
+| `vins_world_frame` | `world` | 检查定位消息的参考系 |
+| `vins_velocity_frame` | `world` | 按 Fusion 源码的世界系速度处理，保留现有 NED/机体系转换 |
+
+Fusion 的 `child_frame_id=body` 不改变其速度字段在源码中的表达坐标系。
+时间戳、重复旧数据、定位超时、视觉后端停更、位置/航向跳变及 PX4 融合检查继续生效。
+Fusion 未提供独立重启通知；接入自定义重启 Bool 时可填写 `vins_restart_topic`。
+原来的 `px4_hover.yaml` 和 `hover_system.launch.py` 继续供 VINS-Mono 使用。
+
+已有依赖与定位程序的环境中，只需更新这两个包（Docker 中在 `/ws` 执行）：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+colcon build --executor sequential --packages-select px4_hover bringup \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+source install/setup.bash
+ros2 launch bringup hover_test.launch.py
+```
+
+使用自定义总配置：
+
+```bash
+ros2 launch bringup hover_test.launch.py config_file:=/绝对路径/hover_test.yaml
+```
+
+该入口保持显式飞行操作，启动后先观察：
+
+```bash
+ros2 topic echo /px4_hover/status
+ros2 topic hz /fmu/in/vehicle_visual_odometry
+```
+
+PX4 EKF2 外部视觉融合参数按第 5 节配置。固件 DDS 还需发布
+`estimator_status_flags`，以及用于命令应答的 `vehicle_command_ack`；合并示例见
+`src/px4_hover/config/px4_dds_additions.yaml`。缺少前者时，默认健康检查会等待，
+诊断原因会显示 `missing estimator_status_flags`。
+
+等待 `READY` 后，默认 `allow_arm_requests: false`，由遥控先解锁，再显式调用：
+
+```bash
+ros2 service call /px4_hover/takeoff std_srvs/srv/Trigger '{}'
+```
+
+需要降落时单独请求 PX4 执行：
+
+```bash
+ros2 service call /px4_hover/land std_srvs/srv/Trigger '{}'
+```
+
+`hold`、`reset` 的条件和使用方式与第 7 节一致。
 
 ## 8. mindvision_camera：相机驱动
 

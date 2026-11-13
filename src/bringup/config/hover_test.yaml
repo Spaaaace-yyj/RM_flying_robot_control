@@ -1,0 +1,14 @@
+# ros2 launch bringup hover_test.launch.py
+# 复用 localization 启动 PX4 串口、IMU 接口、D435 和 VINS-Fusion，另启动悬停管理器。
+# 启动后通过 /px4_hover/status 检查 READY，再显式调用 takeoff/hold/land 服务。
+# 路径规则与 localization.yaml 一致：包 share 内相对路径，或绝对路径；
+# config_package 为空/省略时，相对于本文件所在目录。支持 ~ 和环境变量。
+
+localization:
+  config_package: "bringup"
+  config_file: "config/localization.yaml"
+
+hover:
+  config_package: "px4_hover"
+  config_file: "config/px4_hover_vins_fusion.yaml"
+  use_sim_time: false

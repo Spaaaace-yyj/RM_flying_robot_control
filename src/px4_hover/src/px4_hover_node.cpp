@@ -58,8 +58,12 @@ namespace px4_hover
             state_topic_ = parameter<std::string>("vins_state_topic", "/vins_estimator/imu_propagate");
             //VINS最后输出的里程计话题，检查视觉后端是否仍在更新
             backend_topic_ = parameter<std::string>("vins_backend_topic", "/vins_estimator/odometry");
-            //VINS视觉失效重置后发布标志位
+            //可选的 VINS 重启通知；VINS-Fusion 当前没有此输出，可设为空关闭订阅
             restart_topic_ = parameter<std::string>("vins_restart_topic", "/feature_tracker/restart");
+            if (state_topic_.empty() || backend_topic_.empty())
+            {
+                throw std::invalid_argument("vins_state_topic and vins_backend_topic must not be empty");
+            }
             vio_config_.expected_frame = parameter<std::string>("vins_world_frame", "world");
             const auto velocity_frame = parameter<std::string>("vins_velocity_frame", "world");
             if (velocity_frame != "world" && velocity_frame != "body")
@@ -139,16 +143,22 @@ namespace px4_hover
             {
                 gate_.backend(stampSeconds(m->header.stamp), steadySeconds(), rosSeconds());
             });
-            //VINS视觉失效重置后发布标志位
-            subscribe<std_msgs::msg::Bool>(restart_topic_, rclcpp::QoS(10),
-                                           [this](std_msgs::msg::Bool::ConstSharedPtr m)
-                                           {
-                                               if (m->data)
+            //Fusion 依然检查两路里程计的时间戳、超时、位置/航向跳变。
+            if (!restart_topic_.empty())
+            {
+                subscribe<std_msgs::msg::Bool>(restart_topic_, rclcpp::QoS(10),
+                                               [this](std_msgs::msg::Bool::ConstSharedPtr m)
                                                {
-                                                   gate_.invalidate(
-                                                       "feature_tracker restarted; disarmed reset required");
-                                               }
-                                           });
+                                                   if (m->data)
+                                                   {
+                                                       gate_.invalidate(
+                                                           "VINS restarted; disarmed reset required");
+                                                   }
+                                               });
+            }
+            RCLCPP_INFO(get_logger(), "VINS input: state=%s backend=%s velocity_frame=%s restart=%s",
+                        state_topic_.c_str(), backend_topic_.c_str(), velocity_frame.c_str(),
+                        restart_topic_.empty() ? "disabled" : restart_topic_.c_str());
             //飞机解锁、飞行模式、failsafe 等状态
             subscribe<VehicleStatus>(ns + "/out/vehicle_status", qos, [this](VehicleStatus::ConstSharedPtr m)
             {

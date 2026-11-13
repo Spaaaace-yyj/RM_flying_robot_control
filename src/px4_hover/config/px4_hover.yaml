@@ -3,6 +3,7 @@ px4_hover:
     # ROS2 Humble / PX4 v1.14.3. Launch does not request flight.
     vins_state_topic: /vins_estimator/imu_propagate
     vins_backend_topic: /vins_estimator/odometry
+    # Empty disables the optional restart subscription; Fusion uses its own profile.
     vins_restart_topic: /feature_tracker/restart
     vins_world_frame: world
     # Current VINS source writes Vs (world velocity), despite child_frame_id=body.

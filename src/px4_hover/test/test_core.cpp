@@ -150,6 +150,25 @@ int main()
             }
         },
         {
+            "cached Fusion backend stamps cannot hide a stalled optimizer", []
+            {
+                auto g = gate();
+                CHECK(g.backend(100., 0., 100.));
+                CHECK(sample(g, 0.));
+                CHECK(g.backend(100.2, .2, 100.2));
+                CHECK(sample(g, .2));
+                CHECK(g.health(.2, 100.2).first);
+                // A timer can republish the last backend result while IMU propagation continues.
+                for (double t : {.4, .6, .8, 1., 1.2})
+                {
+                    CHECK(!g.backend(100.2, t, 100. + t));
+                    CHECK(sample(g, t));
+                }
+                CHECK(g.health(1.2, 101.2).second.find("visual optimization") != std::string::npos);
+                CHECK(!g.publishable(101.2, 1.2, 101.2));
+            }
+        },
+        {
             "duplicates cannot refresh watchdog", []
             {
                 auto g = gate();
