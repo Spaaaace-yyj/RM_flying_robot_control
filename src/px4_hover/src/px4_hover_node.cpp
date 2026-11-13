@@ -4,6 +4,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/int16.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
@@ -137,6 +138,7 @@ namespace px4_hover
             setpoint_pub_ = create_publisher<TrajectorySetpoint>(ns + "/in/trajectory_setpoint", 10);
             command_pub_ = create_publisher<VehicleCommand>(ns + "/in/vehicle_command", 10);
             diagnostic_pub_ = create_publisher<std_msgs::msg::String>("~/status", 10);
+            debug_state_num_pub_ = create_publisher<std_msgs::msg::Int16>("~/debug_states_num", 10);
             const auto qos = rclcpp::SensorDataQoS();
             //VINS 的 IMU 前向传播状态，作为外部定位的主要来源
             subscribe<VinsOdom>(state_topic_, qos, [this](VinsOdom::ConstSharedPtr m) { onVio(*m); });
@@ -578,6 +580,9 @@ namespace px4_hover
                 diagnostic_pub_->publish(m);
                 last_diagnostic_ = now;
             }
+            std_msgs::msg::Int16 state_num_msg;
+            state_num_msg.data = static_cast<int16_t>(flight_.state);
+            debug_state_num_pub_->publish(state_num_msg);
         }
 
         struct Attitude
@@ -625,6 +630,7 @@ namespace px4_hover
         rclcpp::Publisher<TrajectorySetpoint>::SharedPtr setpoint_pub_;
         rclcpp::Publisher<VehicleCommand>::SharedPtr command_pub_;
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diagnostic_pub_;
+        rclcpp::Publisher<std_msgs::msg::Int16>::SharedPtr debug_state_num_pub_;
         rclcpp::TimerBase::SharedPtr timer_;
     };
 } // namespace px4_hover
