@@ -100,6 +100,8 @@ namespace px4_hover
             vio_config_.yaw_jump = positiveParameter("max_yaw_jump", .6);
             vio_config_.stable_seconds = positiveParameter("stable_seconds", 2.);
             max_px4_age_ = positiveParameter("max_px4_age", .5);
+            max_status_age_ = positiveParameter("max_vehicle_status_age", 1.);
+            max_ev_age_ = positiveParameter("max_estimator_status_age", 1.5);
             max_sync_age_ = positiveParameter("max_timesync_age", 5.);
             max_round_trip_ms_ = positiveParameter("max_round_trip_ms", 20.);
             require_timesync_ = parameter<bool>("require_timesync", true);
@@ -228,6 +230,9 @@ namespace px4_hover
             timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                            std::chrono::duration<double>(1. / rate_)), [this] { tick(); });
             RCLCPP_INFO(get_logger(), "C++ PX4 hover: no startup arming; wait for READY then call takeoff/hold");
+            RCLCPP_INFO(get_logger(),
+                        "PX4 freshness limits: local/attitude=%.2fs vehicle_status=%.2fs estimator_status_flags=%.2fs",
+                        max_px4_age_, max_status_age_, max_ev_age_);
         }
 
     private:
@@ -282,20 +287,42 @@ namespace px4_hover
         double rosSeconds() const { return static_cast<double>(this->now().nanoseconds()) * 1e-9; }
 
         template <class Message>
+        Check px4Health(const std::shared_ptr<const Message>& message, double received,
+                        double now, double ros_now, double max_age, const char* topic) const
+        {
+            const auto stamp = message ? std::optional<double>(static_cast<double>(message->timestamp) * 1e-6)
+                                       : std::nullopt;
+            return px4MessageFreshness(topic, stamp, received, now, ros_now, max_age);
+        }
+
+        template <class Message>
         bool px4Fresh(const std::shared_ptr<const Message>& message, double received, double now, double ros_now) const
         {
-            if (!message || now - received > max_px4_age_) { return false; }
-            const double age = ros_now - static_cast<double>(message->timestamp) * 1e-6;
-            return age >= -.05 && age <= max_px4_age_;
+            return px4Health(message, received, now, ros_now, max_px4_age_, "PX4 state").first;
+        }
+
+        Check timeHealth(double now, double ros_now) const
+        {
+            if (!clock_guard_.empty()) { return {false, clock_guard_}; }
+            if (!require_timesync_) { return {true, {}}; }
+            if (!sync_) { return {false, "missing timesync_status; waiting for DDS timesync"}; }
+            if (now - sync_rx_ > max_sync_age_) { return {false, "timesync_status receive timeout"}; }
+            if (sync_->source_protocol != TimesyncStatus::SOURCE_PROTOCOL_DDS)
+            {
+                return {false, "timesync_status is not from DDS"};
+            }
+            if (sync_->round_trip_time > max_round_trip_ms_ * 1000.)
+            {
+                return {false, "DDS timesync round trip exceeds max_round_trip_ms"};
+            }
+            // DDS converts PX4 timestamps to ROS time. Verify that mapping using
+            // vehicle_status, whose steady-state source period is 500 ms on v1.14.
+            return px4Health(status_, status_rx_, now, ros_now, max_status_age_, "vehicle_status");
         }
 
         bool timeReady(double now, double ros_now) const
         {
-            if (!clock_guard_.empty()) { return false; }
-            if (!require_timesync_) { return true; }
-            return sync_ && now - sync_rx_ <= max_sync_age_ && sync_->source_protocol ==
-                TimesyncStatus::SOURCE_PROTOCOL_DDS &&
-                sync_->round_trip_time <= max_round_trip_ms_ * 1000. && px4Fresh(status_, status_rx_, now, ros_now);
+            return timeHealth(now, ros_now).first;
         }
 
         void onLocal(const VehicleLocalPosition::ConstSharedPtr& m)
@@ -360,18 +387,19 @@ namespace px4_hover
             Observation out;
             auto check = gate_.health(now, ros_now);
             auto reject = [&check](const std::string& reason) { check = {false, reason}; };
-            out.status_fresh = px4Fresh(status_, status_rx_, now, ros_now);
-            if (!timeReady(now, ros_now))
+            const auto status_health = px4Health(status_, status_rx_, now, ros_now,
+                                                  max_status_age_, "vehicle_status");
+            const auto local_health = px4Health(local_, local_rx_, now, ros_now,
+                                                 max_px4_age_, "vehicle_local_position");
+            const auto time_health = timeHealth(now, ros_now);
+            out.status_fresh = status_health.first;
+            if (!time_health.first)
             {
-                reject(clock_guard_.empty()
-                           ? "waiting for DDS timesync; timestamps must share ROS clock"
-                           : clock_guard_);
+                reject(time_health.second);
             }
             else if (!alignment_.initialized()) { reject("waiting for timestamp-matched PX4 attitude to align VINS"); }
-            else if (!out.status_fresh || !px4Fresh(local_, local_rx_, now, ros_now))
-            {
-                reject("PX4 status/local position stale or timestamp domain mismatch");
-            }
+            else if (!status_health.first) { reject(status_health.second); }
+            else if (!local_health.first) { reject(local_health.second); }
             else if (!(local_->xy_valid && local_->z_valid && local_->v_xy_valid && local_->v_z_valid &&
                 local_->heading_good_for_control && !local_->dead_reckoning))
             {
@@ -379,10 +407,13 @@ namespace px4_hover
             }
             else if (require_ev_status_)
             {
-                if (!px4Fresh(ev_, ev_rx_, now, ros_now))
+                const auto ev_health = px4Health(ev_, ev_rx_, now, ros_now,
+                                                  max_ev_age_, "estimator_status_flags");
+                if (!ev_)
                 {
                     reject("missing estimator_status_flags; add PX4 DDS publication");
                 }
+                else if (!ev_health.first) { reject(ev_health.second); }
                 else if (!(ev_->cs_ev_pos && ev_->cs_ev_hgt && ev_->cs_tilt_align && ev_->cs_yaw_align &&
                     (!require_ev_yaw_ || ev_->cs_ev_yaw)))
                 {
@@ -532,7 +563,16 @@ namespace px4_hover
                     << ",\"target_ned\":" << (flight_.target ? jsonVector(*flight_.target) : "null")
                     << ",\"vio_valid\":" << gate_.health(now, ros_now).first << ",\"reset_counter\":" << gate_.
                     resetCounter()
-                    << ",\"ev_status_required\":" << require_ev_status_ << "}";
+                    << ",\"ev_status_required\":" << require_ev_status_
+                    << ",\"vehicle_status_rx_age_s\":" << jsonNumber(now - status_rx_)
+                    << ",\"vehicle_status_timestamp_age_s\":"
+                    << jsonNumber(status_ ? ros_now - static_cast<double>(status_->timestamp) * 1e-6 : kNever)
+                    << ",\"estimator_status_rx_age_s\":" << jsonNumber(now - ev_rx_)
+                    << ",\"estimator_status_timestamp_age_s\":"
+                    << jsonNumber(ev_ ? ros_now - static_cast<double>(ev_->timestamp) * 1e-6 : kNever)
+                    << ",\"timesync_rx_age_s\":" << jsonNumber(now - sync_rx_)
+                    << ",\"timesync_round_trip_ms\":" << jsonNumber(sync_ ? sync_->round_trip_time * 1e-3 : kNever)
+                    << "}";
                 std_msgs::msg::String m;
                 m.data = data.str();
                 diagnostic_pub_->publish(m);
@@ -565,6 +605,7 @@ namespace px4_hover
         std::string state_topic_, backend_topic_, restart_topic_, mode_topic_, clock_guard_, last_print_;
         bool body_velocity_ = false, require_timesync_ = true, require_ev_status_ = true, require_ev_yaw_ = true;
         double rate_ = 50., max_px4_age_ = .5, max_sync_age_ = 5., max_round_trip_ms_ = 20.;
+        double max_status_age_ = 1., max_ev_age_ = 1.5;
         double position_stddev_ = .1, velocity_stddev_ = .15, orientation_stddev_ = .1;
         uint8_t target_system_ = 1, target_component_ = 1, source_system_ = 245, source_component_ = 191;
         VehicleStatus::ConstSharedPtr status_;

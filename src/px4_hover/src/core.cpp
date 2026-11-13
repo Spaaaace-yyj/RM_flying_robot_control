@@ -36,6 +36,23 @@ namespace px4_hover
         }
     } // namespace
 
+    Check px4MessageFreshness(const std::string& topic, std::optional<double> stamp,
+                              double received, double steady_now, double ros_now, double max_age)
+    {
+        if (!stamp) { return {false, "missing " + topic}; }
+        if (!std::isfinite(*stamp) || *stamp <= 0. || !std::isfinite(received) ||
+            !std::isfinite(steady_now) || !std::isfinite(ros_now) ||
+            !std::isfinite(max_age) || max_age <= 0.)
+        {
+            return {false, "invalid " + topic + " timing"};
+        }
+        if (steady_now - received > max_age) { return {false, topic + " receive timeout"}; }
+        const double age = ros_now - *stamp;
+        if (age < -.05) { return {false, topic + " timestamp is ahead of ROS clock"}; }
+        if (age > max_age) { return {false, topic + " timestamp too old; check latency/ROS clock"}; }
+        return {true, {}};
+    }
+
     /**
      *
      * @brief 检查四元数是否合法：四个分量不是NaN或者Inf,并且范数落在[0.8, 1.2]，接近1

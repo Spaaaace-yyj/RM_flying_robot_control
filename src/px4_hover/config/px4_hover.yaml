@@ -27,7 +27,11 @@ px4_hover:
     require_ev_yaw: true
     max_vio_age: 0.3
     max_backend_age: 0.8
+    # High-rate local position/attitude watchdog.
     max_px4_age: 0.5
+    # PX4 v1.14: vehicle_status ~2 Hz; estimator_status_flags ~1 Hz, or on change.
+    max_vehicle_status_age: 1.0
+    max_estimator_status_age: 1.5
     stable_seconds: 2.0
     max_vio_speed: 8.0
     max_pose_jump: 0.4

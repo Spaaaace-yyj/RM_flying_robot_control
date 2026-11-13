@@ -18,6 +18,11 @@ namespace px4_hover
     constexpr double kNever = -std::numeric_limits<double>::infinity();
     constexpr int kOffboard = 14; // PX4 v1.14 VehicleStatus
 
+    // Check both delivery age (steady clock) and source age (ROS clock).
+    // Callers supply the timeout for the topic's actual publication period.
+    Check px4MessageFreshness(const std::string& topic, std::optional<double> stamp,
+                              double received, double steady_now, double ros_now, double max_age);
+
     Quat checkedQuaternion(const std::array<double, 4>& xyzw);
     double yaw(const Eigen::Matrix3d& rotation);
     double wrap(double angle);

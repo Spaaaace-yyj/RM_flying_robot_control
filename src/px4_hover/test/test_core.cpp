@@ -70,6 +70,85 @@ int main()
     using Test = std::pair<const char*, std::function<void()>>;
     const std::vector<Test> tests{
         {
+            "PX4 2 Hz status and 1 Hz flags keep READY with delivery jitter", []
+            {
+                Flight flight;
+                auto o = good();
+                o.armed = false;
+                double status_stamp = 100., flags_stamp = 100.;
+                double status_rx = 0., flags_rx = 0.;
+                for (int step = 1; step <= 300; ++step)
+                {
+                    const double now = step * .02, ros_now = 100. + now;
+                    // Deliver each sample 30 ms after its source timestamp.
+                    if (step % 25 == 1) { status_stamp = ros_now - .03; status_rx = now; }
+                    if (step % 50 == 1) { flags_stamp = ros_now - .03; flags_rx = now; }
+                    o.status_fresh = px4MessageFreshness("vehicle_status", status_stamp,
+                                                          status_rx, now, ros_now, 1.).first;
+                    o.healthy = o.status_fresh && px4MessageFreshness("estimator_status_flags", flags_stamp,
+                                                                        flags_rx, now, ros_now, 1.5).first;
+                    const auto action = flight.tick(now, ros_now, o);
+                    CHECK(flight.state == State::Ready);
+                    CHECK(!action.heartbeat && !action.command);
+                }
+            }
+        },
+        {
+            "lost low rate PX4 status still stops active control", []
+            {
+                for (bool lose_status : {false, true})
+                {
+                    Context c;
+                    c.flying();
+                    const auto check = px4MessageFreshness(
+                        lose_status ? "vehicle_status" : "estimator_status_flags",
+                        103., 0., 3., 103., lose_status ? 1. : 1.5);
+                    CHECK(!check.first);
+                    CHECK(check.second.find("receive timeout") != std::string::npos);
+                    c.observation.healthy = false;
+                    c.observation.status_fresh = !lose_status;
+                    c.observation.reason = check.second;
+                    const auto action = c.flight.tick(3., 103., c.observation);
+                    CHECK(c.flight.state == State::Fault);
+                    CHECK(!action.heartbeat);
+                }
+            }
+        },
+        {
+            "fresh deliveries cannot conceal old PX4 timestamps", []
+            {
+                for (double now : {2., 2.2, 2.4})
+                {
+                    const auto check = px4MessageFreshness("estimator_status_flags", 100.,
+                                                             now, now, 100. + now, 1.5);
+                    CHECK(!check.first);
+                    CHECK(check.second.find("timestamp too old") != std::string::npos);
+                }
+            }
+        },
+        {
+            "missing PX4 data and ROS clock mismatch have distinct diagnostics", []
+            {
+                const auto missing = px4MessageFreshness("estimator_status_flags", std::nullopt,
+                                                           kNever, 0., 100., 1.5);
+                CHECK(!missing.first);
+                CHECK(missing.second == "missing estimator_status_flags");
+                const auto future = px4MessageFreshness("vehicle_status", 100.1, 0., 0., 100., 1.);
+                CHECK(!future.first);
+                CHECK(future.second.find("ahead of ROS clock") != std::string::npos);
+                CHECK(px4MessageFreshness("vehicle_status", 100.049, 0., 0., 100., 1.).first);
+                CHECK(!px4MessageFreshness("vehicle_status", NAN, 0., 0., 100., 1.).first);
+            }
+        },
+        {
+            "low rate status allowances do not relax local position watchdog", []
+            {
+                CHECK(px4MessageFreshness("vehicle_status", 100., 0., .75, 100.75, 1.).first);
+                CHECK(px4MessageFreshness("estimator_status_flags", 100., 0., .75, 100.75, 1.5).first);
+                CHECK(!px4MessageFreshness("vehicle_local_position", 100., 0., .75, 100.75, .5).first);
+            }
+        },
+        {
             "quaternion normalization and 180 degree rotations", []
             {
                 for (auto q : {

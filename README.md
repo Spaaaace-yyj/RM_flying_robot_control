@@ -568,6 +568,18 @@ PX4 EKF2 外部视觉融合参数按第 5 节配置。固件 DDS 还需发布
 `src/px4_hover/config/px4_dds_additions.yaml`。缺少前者时，默认健康检查会等待，
 诊断原因会显示 `missing estimator_status_flags`。
 
+PX4 v1.14 中，`vehicle_status` 稳态约 2 Hz，`estimator_status_flags` 稳态约 1 Hz，
+状态变化时会提前发布。两者分别使用 `max_vehicle_status_age: 1.0` 和
+`max_estimator_status_age: 1.5`（秒），避免正常发布也在 `READY` / `WAIT_READY`
+之间反复切换；高频位置/姿态仍使用 `max_px4_age: 0.5`。以上门限同时检查接收间隔
+和消息时间戳，不关闭 DDS 时钟或 EKF2 外部视觉融合检查。
+
+已收到但过期的消息会报告对应话题的 `receive timeout` 或 `timestamp too old`，
+不会再误报为缺少话题或笼统的 DDS 同步失败。`/px4_hover/status` 增加
+`vehicle_status_rx_age_s`、`vehicle_status_timestamp_age_s`、
+`estimator_status_rx_age_s`、`estimator_status_timestamp_age_s`、
+`timesync_rx_age_s` 和 `timesync_round_trip_ms`，便于区分低频发布、传输延迟和时钟异常。
+
 等待 `READY` 后，默认 `allow_arm_requests: false`，由遥控先解锁，再显式调用：
 
 ```bash
@@ -977,7 +989,9 @@ VINS/PX4 消息超时、时间倒退、异常跳变、飞控位置重置、控�
 | --- | --- | --- |
 | `takeoff_height` / `climb_speed` | 1.0 m / 0.25 m/s | 相对起飞高度 / 爬升目标速度 |
 | `max_vio_age` / `max_backend_age` | 0.3 s / 0.8 s | 传播状态 / 视觉优化的新鲜度 |
-| `max_px4_age` / `stable_seconds` | 0.5 s / 2.0 s | PX4 新鲜度 / 连续稳定等待 |
+| `max_px4_age` / `stable_seconds` | 0.5 s / 2.0 s | 高频 PX4 位置/姿态新鲜度 / 连续稳定等待 |
+| `max_vehicle_status_age` | 1.0 s | PX4 飞行状态接收间隔和时间戳年龄上限；适配约 2 Hz 发布 |
+| `max_estimator_status_age` | 1.5 s | EKF 融合标志接收间隔和时间戳年龄上限；适配约 1 Hz 发布 |
 | `max_start_speed` | 0.35 m/s | 允许接管时的最大速度 |
 | `max_hover_error` | 1.0 m | 相对当前阶段目标的三维误差上限 |
 | `max_pose_jump` | 0.4 m | 跳变基值，另加 `max_vio_speed` × 采样间隔 |
@@ -1162,7 +1176,7 @@ ros2 launch drone_sim vins_hover.launch.py joy:=false
 | `include/px4_hover/core.hpp` | 状态、配置、观测与动作类型，独立核心接口 |
 | `src/core.cpp` | Eigen 坐标/四元数转换，VINS 健康检查，悬停状态机 |
 | `src/px4_hover_node.cpp` | rclcpp 订阅/发布、服务、定时心跳、PX4 状态及诊断 |
-| `test/test_core.cpp` | 36 项独立核心用例，不依赖 ROS 环境 |
+| `test/test_core.cpp` | 42 项独立核心用例，不依赖 ROS 环境 |
 | `config/px4_hover.yaml` | 保留原参数名与默认值，参数在启动时读取并设为只读 |
 | `config/px4_dds_additions.yaml` | 需合并进 PX4 固件的 DDS 发布条目（文档性参考） |
 
@@ -1184,6 +1198,10 @@ cmake --build build/hover_core -j4
 ctest --test-dir build/hover_core --output-on-failure
 ./build/hover_core/hover_core_test
 ```
+
+本次低频 PX4 状态适配通过 42 项 Release/CTest 核心用例，包含 2 Hz/1 Hz 发布及
+传输延迟下持续 READY、状态断流停止心跳、重复旧时间戳和时钟域异常。
+该回归不包含完整 ROS2 节点构建、DDS 串口链路或实机飞行验证。
 
 C++ 迁移不代表解决 VINS 漂移、完成 EKF2 融合验收或降低 VINS 本体的计算量。
 沿用第 11 节的实机分阶段验收、日志与遥控接管流程。
