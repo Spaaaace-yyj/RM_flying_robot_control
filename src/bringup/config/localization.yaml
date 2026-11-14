@@ -24,3 +24,9 @@ vins_fusion:
   config_file: "config/euroc/euroc_d435_imu_config.yaml"
   # 实机不依赖 /clock；相机的 use_sim_time 仍由 d435.yaml 设置。
   use_sim_time: false
+
+# 在 Foxglove / RViz 中显示跟随里程计位置、姿态的简易四旋翼。
+visualization:
+  enabled: true
+  config_package: "drone_visualization"
+  config_file: "config/drone_visualization.yaml"

@@ -16,6 +16,7 @@
   <exec_depend>d435_bringup</exec_depend>
   <exec_depend>vins_fusion_ros2</exec_depend>
   <exec_depend>px4_hover</exec_depend>
+  <exec_depend>drone_visualization</exec_depend>
   <exec_depend>vins_estimator</exec_depend>
   <exec_depend>feature_tracker</exec_depend>
   <exec_depend>launch_ros</exec_depend>

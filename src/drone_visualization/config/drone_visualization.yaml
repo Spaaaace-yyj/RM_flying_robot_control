@@ -1,0 +1,20 @@
+drone_visualization:
+  ros__parameters:
+    # ROS nav_msgs/Odometry, with pose expressed in header.frame_id.
+    # Fusion's IMU-propagated body pose gives smoother motion than the backend output.
+    odometry_topic: /imu_propagate
+    marker_topic: /drone/markers
+    publish_rate_hz: 20.0
+    # Hide the model if source timestamps or incoming updates become this old.
+    stale_timeout: 0.5
+    # Body/model axes: +X forward, +Y left, +Z up. Dimensions are in metres.
+    body_size: [0.12, 0.08, 0.04]
+    # Distance between left/right (and front/rear) motor centres.
+    motor_span: 0.22
+    propeller_diameter: 0.10
+    propeller_thickness: 0.004
+    arm_width: 0.012
+    motor_height: 0.024
+    body_color: [0.22, 0.28, 0.38, 1.0]
+    front_color: [1.0, 0.35, 0.10, 1.0]
+    rear_color: [0.10, 0.75, 1.0, 1.0]

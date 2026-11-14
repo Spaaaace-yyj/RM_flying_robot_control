@@ -39,6 +39,7 @@
 | `src/mindvision_camera` | 迈德威视工业相机驱动；输出格式/帧率/QoS 可配，直接输出 `mono8` |
 | `src/driver_interface` | 图像灰度桥接（可关闭）+ PX4 `SensorCombined` → `sensor_msgs/Imu` |
 | `src/px4_hover` | VINS → PX4 外部定位桥接、就绪检查、显式起飞/接管/降落状态机 |
+| `src/drone_visualization` | 里程计位姿 → 简易四旋翼 MarkerArray，供 Foxglove / RViz 3D 显示 |
 | `src/bringup` | 总启动包：`localization`、`hover_test`、`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
 | `src/px4_msgs` | PX4 v1.14 消息定义（以源码 vendored，非子模块） |
 | `src/VINS-Mono` | 普通源码目录，由外层 Git 直接管理；ROS 2 移植版，导入自 `ec59526` |
@@ -454,6 +455,7 @@ ros2 topic hz /px4/imu
 - `driver_interface/driver_interface.launch.py`：将 PX4 IMU 转为 `/px4/imu`。
 - `d435_bringup/d435.launch.py`：D435 相机。
 - `vins_fusion_ros2_node`：双目 + IMU 定位。
+- `drone_visualization`：跟随 VINS 里程计位置、姿态的简易四旋翼模型。
 
 入口仅接受 `config_file`，串口参数和各组件配置路径都从
 `src/bringup/config/localization.yaml` 读取，不在 launch 中覆盖相机、IMU
@@ -466,18 +468,19 @@ ros2 topic hz /px4/imu
 | `d435_bringup/config/d435.yaml` | 相机流、分辨率、帧率、曝光和 QoS |
 | `vins_fusion_ros2/config/euroc/euroc_d435_imu_config.yaml` | 图像/IMU 话题、双目内外参引用和 VINS 参数 |
 | `bringup/config/localization.yaml` → `vins_fusion.use_sim_time` | 默认 `false`，使用实机时间 |
+| `drone_visualization/config/drone_visualization.yaml` | 模型输入话题、刷新率、尺寸、颜色和过期时间 |
 
 串口值沿用现有 agent launch 的默认设置，需与飞控一致。相机和 IMU 参数保持
 各自文件中的设置；VINS 的 `cam0_calib`、`cam1_calib` 继续相对于其配置文件解析。
 当前相机配置与 VINS 配置均使用 848×480，左右图像话题为
 `/camera/camera/infra1/image_rect_raw`、`/camera/camera/infra2/image_rect_raw`。
 
-已有环境安装好相机、接口和 VINS-Fusion 后，只需编译新增入口所在包：
+已有环境安装好相机、接口和 VINS-Fusion 后，编译入口和可视化包：
 
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-colcon build --packages-select bringup --cmake-args -DBUILD_TESTING=OFF
+colcon build --packages-select drone_visualization bringup --cmake-args -DBUILD_TESTING=OFF
 source install/setup.bash
 ros2 launch bringup localization.launch.py
 ```
@@ -538,13 +541,13 @@ Fusion 的 `child_frame_id=body` 不改变其速度字段在源码中的表达�
 Fusion 未提供独立重启通知；接入自定义重启 Bool 时可填写 `vins_restart_topic`。
 原来的 `px4_hover.yaml` 和 `hover_system.launch.py` 继续供 VINS-Mono 使用。
 
-已有依赖与定位程序的环境中，只需更新这两个包（Docker 中在 `/ws` 执行）：
+已有依赖与定位程序的环境中，更新以下包（Docker 中在 `/ws` 执行）：
 
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-colcon build --executor sequential --packages-select px4_hover bringup \
+colcon build --executor sequential --packages-select drone_visualization px4_hover bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source install/setup.bash
 ros2 launch bringup hover_test.launch.py
@@ -593,6 +596,47 @@ ros2 service call /px4_hover/land std_srvs/srv/Trigger '{}'
 ```
 
 `hold`、`reset` 的条件和使用方式与第 7 节一致。
+
+### 7.5 Foxglove 3D 无人机位置模型
+
+`localization` / `hover_test` 默认启动 `drone_visualization/odometry_drone_marker`。
+它订阅 `/imu_propagate`（`nav_msgs/msg/Odometry`），最多以 20 Hz 发布
+`/drone/markers`（`visualization_msgs/msg/MarkerArray`）。模型包括机身、四根机臂、
+四个电机/旋翼及机头箭头；橙色为机头和前旋翼，蓝色为后旋翼。模型同时跟随位置
+和姿态，几何直接位于输入的 `header.frame_id`（当前为 `world`），不需要额外机体 TF。
+
+在 Foxglove 中：
+
+1. 保持原来的 Foxglove Bridge 连接；未启动时运行
+   `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`。
+2. 添加 **3D** 面板，将 **Display frame** 设为 `world`。
+3. 在 3D 面板的话题列表中启用 `/drone/markers`，即可看到当前位置的四旋翼。
+4. 可同时启用 VINS 的 `/path`，查看模型与轨迹。
+
+只启动模型显示，不重复启动相机、飞控或 VINS：
+
+```bash
+ros2 launch drone_visualization drone_visualization.launch.py
+```
+
+若 `localization` 已启动该节点，不要再重复启动上述独立入口。自定义参数文件：
+
+```bash
+ros2 launch drone_visualization drone_visualization.launch.py \
+  config_file:=/绝对路径/drone_visualization.yaml
+```
+
+所有模型参数在 `src/drone_visualization/config/drone_visualization.yaml` 中修改，
+重启后生效。`odometry_topic` 可改成 `/odometry` 查看视觉后端位姿；输入必须是
+`nav_msgs/msg/Odometry`。默认尺寸只是示意：机身 0.12×0.08×0.04 m，前后/左右电机
+中心间距 0.22 m，旋翼直径 0.10 m，可按实际机架调整。模型轴向为 ROS 机体系
+`+X` 前、`+Y` 左、`+Z` 上，姿态使用输入 odometry 的四元数。
+
+只使用 5 个固定 ID 的基本图形 Marker，避免累积历史模型。更新停顿或时间戳过期
+超过 `stale_timeout`（默认 0.5 s）时隐藏模型，恢复新鲜数据后自动重现。
+模型显示 VINS 位姿，飞控融合和控制就绪状态仍看 `/px4_hover/status`。
+将 `localization.yaml` 的 `visualization.enabled` 改为 `false` 可关闭；旧的自定义总
+配置未包含此节时仍按原样启动。
 
 ## 8. mindvision_camera：相机驱动
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -61,7 +61,7 @@ def _launch_setup(context):
     if not isinstance(use_sim_time, bool):
         raise ValueError("vins_fusion.use_sim_time must be a YAML boolean")
 
-    return [
+    actions = [
         LogInfo(msg=f"Localization configuration: {config_path}"),
         _include("bringup", "px4_xrce_agent.launch.py", {
             "device": device,
@@ -83,6 +83,24 @@ def _launch_setup(context):
             parameters=[{"config_file": vins_config, "use_sim_time": use_sim_time}],
         ),
     ]
+
+    # Optional for existing custom localization YAMLs; enabled in the shipped profile.
+    visualization = config.get("visualization", {})
+    if not isinstance(visualization, dict):
+        raise ValueError("visualization must be a YAML mapping")
+    enabled = visualization.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("visualization.enabled must be a YAML boolean")
+    if enabled:
+        marker_config = _config_path(visualization, config_path.parent)
+        # The child launch also declares config_file: keep it in its own scope.
+        actions.append(GroupAction(scoped=True, actions=[
+            _include("drone_visualization", "drone_visualization.launch.py", {
+                "config_file": marker_config,
+                "use_sim_time": str(use_sim_time).lower(),
+            }),
+        ]))
+    return actions
 
 
 def generate_launch_description():
