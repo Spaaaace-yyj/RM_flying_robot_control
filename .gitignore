@@ -36,3 +36,5 @@ Makefile
 .colcon/
 *.log
 /tests/
+
+/src/rosbag/

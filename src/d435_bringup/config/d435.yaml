@@ -49,6 +49,10 @@ depth_module.gain: 16
 # 1：开启红外散斑；0：关闭。先保持深度采集配置，做 VINS 时可比较关闭效果。
 depth_module.emitter_enabled: 0
 
+# ---------- 图像旋转 ----------
+rotation_filter.enable: true
+rotation_filter.rotation: 180.0
+
 # ---------- 帧同步 ----------
 # 相机内部数据流配对；不会自动同步外部 PX4 IMU。
 enable_sync: false
