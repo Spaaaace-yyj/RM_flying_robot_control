@@ -388,7 +388,10 @@ namespace px4_hover
         {
             Observation out;
             auto check = gate_.health(now, ros_now);
-            auto reject = [&check](const std::string& reason) { check = {false, reason}; };
+            auto reject = [&check](const std::string& reason)
+            {
+                check = {false, reason};
+            };
             const auto status_health = px4Health(status_, status_rx_, now, ros_now,
                                                   max_status_age_, "vehicle_status");
             const auto local_health = px4Health(local_, local_rx_, now, ros_now,
@@ -399,9 +402,18 @@ namespace px4_hover
             {
                 reject(time_health.second);
             }
-            else if (!alignment_.initialized()) { reject("waiting for timestamp-matched PX4 attitude to align VINS"); }
-            else if (!status_health.first) { reject(status_health.second); }
-            else if (!local_health.first) { reject(local_health.second); }
+            else if (!alignment_.initialized())
+            {
+                reject("waiting for timestamp-matched PX4 attitude to align VINS");
+            }
+            else if (!status_health.first)
+            {
+                reject(status_health.second);
+            }
+            else if (!local_health.first)
+            {
+                reject(local_health.second);
+            }
             else if (!(local_->xy_valid && local_->z_valid && local_->v_xy_valid && local_->v_z_valid &&
                 local_->heading_good_for_control && !local_->dead_reckoning))
             {

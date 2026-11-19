@@ -39,7 +39,10 @@ namespace px4_hover
     Check px4MessageFreshness(const std::string& topic, std::optional<double> stamp,
                               double received, double steady_now, double ros_now, double max_age)
     {
-        if (!stamp) { return {false, "missing " + topic}; }
+        if (!stamp)
+        {
+            return {false, "missing " + topic};
+        }
         if (!std::isfinite(*stamp) || *stamp <= 0. || !std::isfinite(received) ||
             !std::isfinite(steady_now) || !std::isfinite(ros_now) ||
             !std::isfinite(max_age) || max_age <= 0.)
@@ -219,12 +222,19 @@ namespace px4_hover
 
     Check VioGate::health(double now, double ros_now) const
     {
-        if (!latched_.empty()) { return {false, latched_}; }
+        if (!latched_.empty())
+        {
+            return {false, latched_};
+        }
         if (!last_ || now - received_ > config_.max_age)
         {
             return {false, rejection_.empty() ? "VINS propagated state timed out" : rejection_};
         }
-        if (!fresh(last_->stamp, ros_now, config_.max_age)) { return {false, "VINS sample time is stale/future"}; }
+        if (!fresh(last_->stamp, ros_now, config_.max_age))
+        {
+            return {false, "VINS sample time is stale/future"};
+        }
+        //检查VINS后端是否超时
         if (!backend_stamp_ || now - backend_received_ > config_.backend_age ||
             !fresh(*backend_stamp_, ros_now, config_.backend_age))
         {
@@ -284,7 +294,10 @@ namespace px4_hover
         }
     }
 
-    Flight::Flight(FlightConfig config) : config_(config) { config_.validate(); }
+    Flight::Flight(FlightConfig config) : config_(config)
+    {
+        config_.validate();
+    }
 
     void Flight::transition(State next, double now, const std::string& detail)
     {
@@ -299,23 +312,40 @@ namespace px4_hover
 
     Check Flight::begin(double now, double ros_now, const Observation& o, bool takeoff)
     {
+        //状态检查
+        //当前状态是 READY 或 MANUAL，定位与飞控条件健康，PX4 状态新鲜
         if ((state != State::Ready && state != State::Manual) || !o.healthy || !o.status_fresh)
         {
             return {false, "not ready: " + o.reason};
         }
-        if (o.failsafe) { return {false, "PX4 is in failsafe"}; }
+        //PX4 没有 failsafe
+        if (o.failsafe)
+        {
+            return {false, "PX4 is in failsafe"};
+        }
+        //位置、速度和 heading 有效
         if (!o.position.allFinite() || !o.velocity.allFinite() || !std::isfinite(o.heading))
         {
             return {false, "non-finite PX4 local state"};
         }
-        if (!takeoff && !o.armed) { return {false, "hold requires an already armed vehicle"}; }
+        if (!takeoff && !o.armed)
+        {
+            return {false, "hold requires an already armed vehicle"};
+        }
         if (!o.armed && !config_.allow_arm_requests)
         {
             return {false, "arm with RC first, or explicitly enable allow_arm_requests"};
         }
-        if (o.velocity.norm() > config_.max_start_speed) { return {false, "initial speed exceeds max_start_speed"}; }
+        //初始速度不超过默认 0.35 m/s
+        if (o.velocity.norm() > config_.max_start_speed)
+        {
+            return {false, "initial speed exceeds max_start_speed"};
+        }
+
+        //获取当前状态
         target = o.position;
         heading_ = o.heading;
+        //起飞目标高度，由于PX4采用NED所以上升对应高度减少
         goal_z_ = o.position.z() - (takeoff ? config_.takeoff_height : 0.);
         ever_armed_ = o.armed;
         last_ros_ = ros_now;
@@ -359,6 +389,13 @@ namespace px4_hover
         return {true, "LAND requested; never sends in-air disarm"};
     }
 
+    /**
+     * @brief 状态机主循环
+     * @param now 当前时间
+     * @param ros_now ros时间
+     * @param o 飞控观测状态
+     * @return Action无人机对应动作
+     */
     Action Flight::tick(double now, double ros_now, const Observation& o)
     {
         Action out;

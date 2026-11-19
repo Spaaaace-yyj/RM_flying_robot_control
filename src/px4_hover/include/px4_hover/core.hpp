@@ -100,8 +100,16 @@ namespace px4_hover
 
     enum class State
     {
-        WaitReady, Ready, Priming, RequestOffboard, RequestArm,
-        Takeoff, Hover, Manual, Fault, Landing
+        WaitReady,  //等待定位、同步、PX4 状态满足条件
+        Ready,  //条件满足，等待显式操作
+        Priming,    //预发送位置目标和心跳
+        RequestOffboard,    //请求并等待 PX4 确认 Offboard
+        RequestArm, //请求并等待 PX4 确认解锁
+        Takeoff,    //逐步抬升目标高度
+        Hover,  //保持固定位置和 yaw
+        Manual, //控制已交还 PX4/遥控，或飞行结束
+        Fault,  //上位机检测到故障
+        Landing //已请求 PX4 降落
     };
 
     const char* stateName(State state);
@@ -152,7 +160,7 @@ namespace px4_hover
         Check land(double steady_now, const Observation& observation);
         Action tick(double steady_now, double ros_now, const Observation& observation);
 
-        State state = State::WaitReady;
+        State   state = State::WaitReady;
         std::string reason = "waiting for localization and PX4";
         std::optional<Vec3> target;
 
