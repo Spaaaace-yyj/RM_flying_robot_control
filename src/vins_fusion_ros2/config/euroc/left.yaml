@@ -1,19 +1,17 @@
 %YAML:1.0
 ---
-# camera_2: left; source topic: /camera/camera/infra2/image_rect_raw
+# /camera/camera/infra2/image_rect_raw
 model_type: PINHOLE
 camera_name: left
 image_width: 848
 image_height: 480
-
 distortion_parameters:
-   k1: 0.002067074105164274
-   k2: 0.0011610060268194694
-   p1: -3.668840635710048e-05
-   p2: -0.00024226031332641034
-
+   k1: 0.0033427163695661697
+   k2: 0.00035065917945039586
+   p1: -0.00023996008548385787
+   p2: -5.0370345388945784e-05
 projection_parameters:
-   fx: 427.20098708383466
-   fy: 424.7124894920909
-   cx: 421.32861554739304
-   cy: 235.25103357960296
+   fx: 427.50033622217705
+   fy: 425.07201135639286
+   cx: 421.71994891853495
+   cy: 235.59774798041488

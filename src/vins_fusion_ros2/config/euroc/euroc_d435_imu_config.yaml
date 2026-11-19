@@ -1,6 +1,6 @@
 %YAML:1.0
 ---
-# Calibration 2026-11-19: cam0 = camera_2 left; cam1 = camera_1 right.
+# Repeat calibration: rotated 848x480 IR; cam0 = infra2 (left), cam1 = infra1 (right).
 #common parameters
 #support: 1 imu 1 cam; 1 imu 2 cam: 2 cam;
 imu: 1
@@ -31,9 +31,9 @@ body_T_cam0: !!opencv-matrix
   rows: 4
   cols: 4
   dt: d
-  data: [-0.020709961511, 0.036839728476, 0.999106566839, -0.063223906124,
-         -0.999785234218, -0.001526258950, -0.020667752010, 0.045357397268,
-         0.000763500968, -0.999320021284, 0.036863425327, 0.021437521040,
+  data: [0.012578227116, 0.028108924818, 0.999525725806, -0.093099959719,
+         -0.999832854540, 0.013617791112, 0.012199128988, 0.010042888142,
+         -0.013268428146, -0.999512103034, 0.028275514208, 0.023643586991,
          0.000000000000, 0.000000000000, 0.000000000000, 1.000000000000]
 
 # camera_1 / right optical frame -> calibration IMU frame; metres
@@ -41,9 +41,9 @@ body_T_cam1: !!opencv-matrix
   rows: 4
   cols: 4
   dt: d
-  data: [-0.010975990241, 0.036006046348, 0.999291295001, -0.060610866299,
-         -0.999938752319, -0.001815392326, -0.010917690308, -0.009245791316,
-         0.001421002885, -0.999349923189, 0.036023766790, 0.022035285212,
+  data: [0.018953390284, 0.028455268295, 0.999415362451, -0.089274228499,
+         -0.999733693165, 0.013701197417, 0.018569327945, -0.042425395654,
+         -0.013164791974, -0.999501163029, 0.028707374605, 0.022986208223,
          0.000000000000, 0.000000000000, 0.000000000000, 1.000000000000]
 
 #Multiple thread support
@@ -71,7 +71,7 @@ g_norm: 9.81007     # gravity magnitude
 
 #unsynchronization parameters
 estimate_td: 0
-td: 0.09782369397981208  # t_imu = t_image0 + td; use camera_2 / left estimate
+td: 0.07321308855450581  # t_imu = t_image0 + td (infra2)
 
 #loop closure parameters
 load_previous_pose_graph: 0        # load and reuse previous pose graph; load from 'pose_graph_save_path'
