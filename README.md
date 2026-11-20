@@ -468,6 +468,7 @@ ros2 topic hz /px4/imu
 | `d435_bringup/config/d435.yaml` | 相机流、分辨率、帧率、曝光和 QoS |
 | `vins_fusion_ros2/config/euroc/euroc_d435_imu_config.yaml` | 图像/IMU 话题、双目内外参引用和 VINS 参数 |
 | `bringup/config/localization.yaml` → `vins_fusion.use_sim_time` | 默认 `false`，使用实机时间 |
+| `bringup/config/localization.yaml` → `vins_fusion.startup_delay_s` | 仅延迟 VINS-Fusion，默认 8 秒，设为 `0` 立即启动。`hover_test` 继承此设置。旧自定义 YAML 省略该项时仍立即启动。 |
 | `drone_visualization/config/drone_visualization.yaml` | 模型输入话题、刷新率、尺寸、颜色和过期时间 |
 
 串口值沿用现有 agent launch 的默认设置，需与飞控一致。相机和 IMU 参数保持

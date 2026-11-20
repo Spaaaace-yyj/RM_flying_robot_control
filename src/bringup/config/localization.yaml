@@ -20,6 +20,8 @@ d435:
   config_file: "config/d435.yaml"
 
 vins_fusion:
+  # 从启动算起，等待 PX4 DDS 和相机建立数据流。设为 0 可立即启动。
+  startup_delay_s: 8.0
   config_package: "vins_fusion_ros2"
   config_file: "config/euroc/euroc_d435_imu_config.yaml"
   # 实机不依赖 /clock；相机的 use_sim_time 仍由 d435.yaml 设置。

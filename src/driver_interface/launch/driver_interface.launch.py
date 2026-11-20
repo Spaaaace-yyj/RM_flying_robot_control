@@ -41,29 +41,46 @@ def _launch_setup(context):
         if value != "":
             params[name] = convert(value)
 
-    return [Node(
+    driver_interface_node = Node(
         package="driver_interface",
         executable="driver_interface_node",
         name="driver_interface",
         output="screen",
         parameters=[params],
-    )]
+    )
+    return [driver_interface_node]
 
 
 def generate_launch_description():
     default_config = os.path.join(
-        get_package_share_directory("driver_interface"), "config", "driver_interface.yaml")
+        get_package_share_directory("driver_interface"), "config", "driver_interface.yaml"
+    )
 
-    return LaunchDescription([
-        DeclareLaunchArgument("config_file", default_value=default_config),
-        # Empty means use YAML; explicit launch arguments override YAML.
-        DeclareLaunchArgument("enable_image_bridge", default_value=""),
-        DeclareLaunchArgument("camera_input_topic", default_value=""),
-        DeclareLaunchArgument("gray_output_topic", default_value=""),
-        DeclareLaunchArgument("px4_imu_input_topic", default_value=""),
-        DeclareLaunchArgument("imu_output_topic", default_value=""),
-        DeclareLaunchArgument("timestamp_mode", default_value=""),
-        DeclareLaunchArgument("timestamp_offset_sec", default_value=""),
-        DeclareLaunchArgument("convert_frd_to_flu", default_value=""),
-        OpaqueFunction(function=_launch_setup),
-    ])
+    declare_config_file_cmd = DeclareLaunchArgument("config_file", default_value=default_config)
+    declare_enable_image_bridge_cmd = DeclareLaunchArgument("enable_image_bridge", default_value="")
+    declare_camera_input_topic_cmd = DeclareLaunchArgument("camera_input_topic", default_value="")
+    declare_gray_output_topic_cmd = DeclareLaunchArgument("gray_output_topic", default_value="")
+    declare_px4_imu_input_topic_cmd = DeclareLaunchArgument("px4_imu_input_topic", default_value="")
+    declare_imu_output_topic_cmd = DeclareLaunchArgument("imu_output_topic", default_value="")
+    declare_timestamp_mode_cmd = DeclareLaunchArgument("timestamp_mode", default_value="")
+    declare_timestamp_offset_sec_cmd = DeclareLaunchArgument(
+        "timestamp_offset_sec", default_value=""
+    )
+    declare_convert_frd_to_flu_cmd = DeclareLaunchArgument("convert_frd_to_flu", default_value="")
+
+    launch_setup = OpaqueFunction(function=_launch_setup)
+
+    return LaunchDescription(
+        [
+            declare_config_file_cmd,
+            declare_enable_image_bridge_cmd,
+            declare_camera_input_topic_cmd,
+            declare_gray_output_topic_cmd,
+            declare_px4_imu_input_topic_cmd,
+            declare_imu_output_topic_cmd,
+            declare_timestamp_mode_cmd,
+            declare_timestamp_offset_sec_cmd,
+            declare_convert_frd_to_flu_cmd,
+            launch_setup,
+        ]
+    )

@@ -60,28 +60,34 @@ def _launch_camera(context):
     if not all(isinstance(item, str) for item in (namespace, log_level, output, name)):
         raise ValueError("camera_name, camera_namespace, log_level and output must be strings.")
 
-    return [
-        LogInfo(msg=f"D435 configuration: {path}"),
-        Node(
-            package="realsense2_camera",
-            executable="realsense2_camera_node",
-            name=name,
-            namespace=namespace,
-            output=output,
-            emulate_tty=True,
-            parameters=[_preserve_strings(config)],
-            arguments=["--ros-args", "--log-level", log_level],
-        ),
-    ]
+    log_config = LogInfo(msg=f"D435 configuration: {path}")
+    camera_node = Node(
+        package="realsense2_camera",
+        executable="realsense2_camera_node",
+        name=name,
+        namespace=namespace,
+        output=output,
+        emulate_tty=True,
+        parameters=[_preserve_strings(config)],
+        arguments=["--ros-args", "--log-level", log_level],
+    )
+    return [log_config, camera_node]
 
 
 def generate_launch_description():
-    # The same relative layout works from the source and installed package.
     default_config = Path(__file__).resolve().parent.parent / "config" / "d435.yaml"
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            "config_file", default_value=str(default_config),
-            description="Path to the camera YAML configuration file",
-        ),
-        OpaqueFunction(function=_launch_camera),
-    ])
+
+    declare_config_file_cmd = DeclareLaunchArgument(
+        "config_file",
+        default_value=str(default_config),
+        description="Path to the camera YAML configuration file",
+    )
+
+    launch_camera = OpaqueFunction(function=_launch_camera)
+
+    return LaunchDescription(
+        [
+            declare_config_file_cmd,
+            launch_camera,
+        ]
+    )

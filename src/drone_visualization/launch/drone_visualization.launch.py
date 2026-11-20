@@ -11,18 +11,32 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    config = Path(get_package_share_directory("drone_visualization")) / "config" / "drone_visualization.yaml"
-    return LaunchDescription([
-        DeclareLaunchArgument("config_file", default_value=str(config)),
-        DeclareLaunchArgument("use_sim_time", default_value="false"),
-        Node(
-            package="drone_visualization",
-            executable="odometry_drone_marker",
-            name="drone_visualization",
-            output="screen",
-            parameters=[
-                LaunchConfiguration("config_file"),
-                {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)},
-            ],
-        ),
-    ])
+    config = (
+        Path(get_package_share_directory("drone_visualization"))
+        / "config"
+        / "drone_visualization.yaml"
+    )
+    config_file = LaunchConfiguration("config_file")
+    use_sim_time = LaunchConfiguration("use_sim_time")
+
+    declare_config_file_cmd = DeclareLaunchArgument("config_file", default_value=str(config))
+    declare_use_sim_time_cmd = DeclareLaunchArgument("use_sim_time", default_value="false")
+
+    drone_visualization_node = Node(
+        package="drone_visualization",
+        executable="odometry_drone_marker",
+        name="drone_visualization",
+        output="screen",
+        parameters=[
+            config_file,
+            {"use_sim_time": ParameterValue(use_sim_time, value_type=bool)},
+        ],
+    )
+
+    return LaunchDescription(
+        [
+            declare_config_file_cmd,
+            declare_use_sim_time_cmd,
+            drone_visualization_node,
+        ]
+    )

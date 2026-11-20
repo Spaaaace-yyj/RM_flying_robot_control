@@ -36,10 +36,15 @@ def _config_path(section, config_dir):
 def _include(package, filename, arguments):
     path = Path(get_package_share_directory(package)) / "launch" / filename
     # Both child launches use config_file: keep their launch configurations scoped.
-    return GroupAction(scoped=True, actions=[IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(str(path)),
-        launch_arguments=arguments.items(),
-    )])
+    return GroupAction(
+        scoped=True,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(str(path)),
+                launch_arguments=arguments.items(),
+            )
+        ],
+    )
 
 
 def _launch_setup(context):
@@ -56,24 +61,39 @@ def _launch_setup(context):
     use_sim_time = config["hover"]["use_sim_time"]
     if not isinstance(use_sim_time, bool):
         raise ValueError("hover.use_sim_time must be a YAML boolean")
-    return [
-        LogInfo(msg=f"Hover test configuration: {path}"),
-        _include("bringup", "localization.launch.py", {
+    log_config = LogInfo(msg=f"Hover test configuration: {path}")
+    localization_launch = _include(
+        "bringup",
+        "localization.launch.py",
+        {
             "config_file": localization_config,
-        }),
-        _include("px4_hover", "px4_hover.launch.py", {
+        },
+    )
+    hover_launch = _include(
+        "px4_hover",
+        "px4_hover.launch.py",
+        {
             "config_file": hover_config,
             "use_sim_time": str(use_sim_time).lower(),
-        }),
-    ]
+        },
+    )
+    return [log_config, localization_launch, hover_launch]
 
 
 def generate_launch_description():
     default_config = Path(get_package_share_directory("bringup")) / "config" / "hover_test.yaml"
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            "config_file", default_value=str(default_config),
-            description="YAML selecting localization and VINS-Fusion hover configurations",
-        ),
-        OpaqueFunction(function=_launch_setup),
-    ])
+
+    declare_config_file_cmd = DeclareLaunchArgument(
+        "config_file",
+        default_value=str(default_config),
+        description="YAML selecting localization and VINS-Fusion hover configurations",
+    )
+
+    launch_setup = OpaqueFunction(function=_launch_setup)
+
+    return LaunchDescription(
+        [
+            declare_config_file_cmd,
+            launch_setup,
+        ]
+    )

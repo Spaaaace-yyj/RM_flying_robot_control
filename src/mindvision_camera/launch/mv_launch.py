@@ -41,27 +41,40 @@ def _launch_setup(context):
         if value != "":
             params[name] = convert(value)
 
-    return [Node(
+    camera_node = Node(
         package="mindvision_camera",
         executable="mindvision_camera_node",
         name="camera_node",
         output="screen",
         parameters=[params],
-    )]
+    )
+    return [camera_node]
 
 
 def generate_launch_description():
     default_config = os.path.join(
-        get_package_share_directory("mindvision_camera"), "config", "camera_params.yaml")
+        get_package_share_directory("mindvision_camera"), "config", "camera_params.yaml"
+    )
 
-    return LaunchDescription([
-        DeclareLaunchArgument("config_file", default_value=default_config),
-        # Empty means use YAML (do not overwrite it with launch defaults).
-        DeclareLaunchArgument("full_speed", default_value=""),
-        DeclareLaunchArgument("target_fps", default_value=""),
-        DeclareLaunchArgument("output_encoding", default_value=""),
-        DeclareLaunchArgument("image_topic", default_value=""),
-        DeclareLaunchArgument("use_sensor_data_qos", default_value=""),
-        DeclareLaunchArgument("qos_depth", default_value=""),
-        OpaqueFunction(function=_launch_setup),
-    ])
+    declare_config_file_cmd = DeclareLaunchArgument("config_file", default_value=default_config)
+    declare_full_speed_cmd = DeclareLaunchArgument("full_speed", default_value="")
+    declare_target_fps_cmd = DeclareLaunchArgument("target_fps", default_value="")
+    declare_output_encoding_cmd = DeclareLaunchArgument("output_encoding", default_value="")
+    declare_image_topic_cmd = DeclareLaunchArgument("image_topic", default_value="")
+    declare_use_sensor_data_qos_cmd = DeclareLaunchArgument("use_sensor_data_qos", default_value="")
+    declare_qos_depth_cmd = DeclareLaunchArgument("qos_depth", default_value="")
+
+    launch_setup = OpaqueFunction(function=_launch_setup)
+
+    return LaunchDescription(
+        [
+            declare_config_file_cmd,
+            declare_full_speed_cmd,
+            declare_target_fps_cmd,
+            declare_output_encoding_cmd,
+            declare_image_topic_cmd,
+            declare_use_sensor_data_qos_cmd,
+            declare_qos_depth_cmd,
+            launch_setup,
+        ]
+    )

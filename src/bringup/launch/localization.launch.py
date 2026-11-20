@@ -1,12 +1,20 @@
 """Start PX4 serial, D435, the IMU interface and VINS-Fusion from YAML."""
 
+import math
 import os
 from pathlib import Path
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    TimerAction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -61,27 +69,53 @@ def _launch_setup(context):
     if not isinstance(use_sim_time, bool):
         raise ValueError("vins_fusion.use_sim_time must be a YAML boolean")
 
-    actions = [
-        LogInfo(msg=f"Localization configuration: {config_path}"),
-        _include("bringup", "px4_xrce_agent.launch.py", {
+    delay_s = config["vins_fusion"].get("startup_delay_s", 0.0)
+    if (
+        isinstance(delay_s, bool)
+        or not isinstance(delay_s, (int, float))
+        or not math.isfinite(delay_s)
+        or delay_s < 0
+    ):
+        raise ValueError("vins_fusion.startup_delay_s must be a finite, non-negative number")
+
+    log_config = LogInfo(msg=f"Localization configuration: {config_path} (VINS delay: {delay_s} s)")
+    px4_agent_launch = _include(
+        "bringup",
+        "px4_xrce_agent.launch.py",
+        {
             "device": device,
             "baud": str(baud),
-        }),
-        # Pass file paths only, preserving all settings in the existing YAMLs.
-        _include("driver_interface", "driver_interface.launch.py", {
+        },
+    )
+    driver_interface_launch = _include(
+        "driver_interface",
+        "driver_interface.launch.py",
+        {
             "config_file": driver_config,
-        }),
-        _include("d435_bringup", "d435.launch.py", {
-            "config_file": camera_config,
-        }),
-        Node(
-            package="vins_fusion_ros2",
-            executable="vins_fusion_ros2_node",
-            name="vins_fusion_ros2_node",
-            output="screen",
-            emulate_tty=True,
-            parameters=[{"config_file": vins_config, "use_sim_time": use_sim_time}],
-        ),
+        },
+    )
+    d435_launch = _include("d435_bringup", "d435.launch.py", {"config_file": camera_config})
+    vins_fusion_node = Node(
+        package="vins_fusion_ros2",
+        executable="vins_fusion_ros2_node",
+        name="vins_fusion_ros2_node",
+        output="screen",
+        emulate_tty=True,
+        parameters=[{"config_file": vins_config, "use_sim_time": use_sim_time}],
+    )
+    # Use wall time so startup does not depend on /clock.
+    start_vins_fusion = (
+        TimerAction(period=float(delay_s), actions=[vins_fusion_node])
+        if delay_s > 0
+        else vins_fusion_node
+    )
+
+    actions = [
+        log_config,
+        px4_agent_launch,
+        driver_interface_launch,
+        d435_launch,
+        start_vins_fusion,
     ]
 
     # Optional for existing custom localization YAMLs; enabled in the shipped profile.
@@ -94,21 +128,37 @@ def _launch_setup(context):
     if enabled:
         marker_config = _config_path(visualization, config_path.parent)
         # The child launch also declares config_file: keep it in its own scope.
-        actions.append(GroupAction(scoped=True, actions=[
-            _include("drone_visualization", "drone_visualization.launch.py", {
-                "config_file": marker_config,
-                "use_sim_time": str(use_sim_time).lower(),
-            }),
-        ]))
+        visualization_launch = GroupAction(
+            scoped=True,
+            actions=[
+                _include(
+                    "drone_visualization",
+                    "drone_visualization.launch.py",
+                    {
+                        "config_file": marker_config,
+                        "use_sim_time": str(use_sim_time).lower(),
+                    },
+                ),
+            ],
+        )
+        actions.append(visualization_launch)
     return actions
 
 
 def generate_launch_description():
     default_config = Path(get_package_share_directory("bringup")) / "config" / "localization.yaml"
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            "config_file", default_value=str(default_config),
-            description="Localization YAML with serial settings and component configuration paths",
-        ),
-        OpaqueFunction(function=_launch_setup),
-    ])
+
+    declare_config_file_cmd = DeclareLaunchArgument(
+        "config_file",
+        default_value=str(default_config),
+        description="Localization YAML with serial settings and component configuration paths",
+    )
+
+    launch_setup = OpaqueFunction(function=_launch_setup)
+
+    return LaunchDescription(
+        [
+            declare_config_file_cmd,
+            launch_setup,
+        ]
+    )
