@@ -164,7 +164,7 @@ namespace px4_hover
                         state_topic_.c_str(), backend_topic_.c_str(), velocity_frame.c_str(),
                         restart_topic_.empty() ? "disabled" : restart_topic_.c_str());
             //飞机解锁、飞行模式、failsafe 等状态
-            subscribe<VehicleStatus>(ns + "/out/vehicle_status", qos, [this](VehicleStatus::ConstSharedPtr m)
+            subscribe<VehicleStatus>(ns + "/out/vehicle_status_v1", qos, [this](VehicleStatus::ConstSharedPtr m)
             {
                 if (last_status_stamp_ && m->timestamp < *last_status_stamp_)
                 {
@@ -178,7 +178,7 @@ namespace px4_hover
             });
 
             //PX4 融合后的位置、速度、heading 和重置计数
-            subscribe<VehicleLocalPosition>(ns + "/out/vehicle_local_position", qos,
+            subscribe<VehicleLocalPosition>(ns + "/out/vehicle_local_position_v1", qos,
                                             [this](VehicleLocalPosition::ConstSharedPtr m) { onLocal(m); });
             //用于 VINS 与 PX4 的初始航向对齐
             subscribe<VehicleAttitude>(ns + "/out/vehicle_attitude", qos, [this](VehicleAttitude::ConstSharedPtr m)
