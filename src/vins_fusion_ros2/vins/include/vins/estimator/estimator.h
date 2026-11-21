@@ -72,11 +72,14 @@ class Estimator {
   bool getkeyframePose(PoseData &data);
 
  private:
+  void resetStateLocked();
   void initializeCamerasFromOptions();
   void processIMU(const IMUData &data, double deltaTime);
   void updateStateWithIMU(const IMUData &data, double deltaTime);
   void processImage(const FeatureFrame &features, Timestamp timestamp);
-  void fastPredictIMU(const IMUData &data);
+  // Call with propagateMutex held. Only completed predictions are exposed to ROS.
+  bool fastPredictIMU(const IMUData &data);
+  void storeImuPrediction();
 
   bool isNonLinearSolver() const;
   bool isNewMarginalization() const;
@@ -162,7 +165,7 @@ class Estimator {
   Timestamp initialTimestamp = 0;
 
   bool openExEstimation;
-  SolverState solver_flag;
+  SolverState solver_flag = SolverState::INITIAL;
   MarginalizationType marginalization_flag;
   Vector3d gravity;
   Matrix3d cameraRotation[2];
@@ -200,7 +203,9 @@ class Estimator {
   PoseSequenceData key_poses;
   ImageData track_image;
   SafeClass<ImageData> safe_track_image;
-  SafeClass<OdomData> safe_imu_pre_odom;
+  // Protected together with latest_state, latest_Q and latestImuData by propagateMutex.
+  bool propagationInitialized = false;
+  double lastReadImuStamp = 0.0;
   OdomData imu_odom;
   SafeClass<OdomData> safe_vio_odom;
   OdomData vio_odom;

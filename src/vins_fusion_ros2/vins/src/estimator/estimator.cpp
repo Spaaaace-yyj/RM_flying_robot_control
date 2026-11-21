@@ -24,7 +24,16 @@ Estimator::~Estimator() {
 }
 
 void Estimator::resetState() {
+  std::lock_guard<std::mutex> lock(processingMutex);
+  resetStateLocked();
+}
+
+void Estimator::resetStateLocked() {
   {
+    std::lock_guard<std::mutex> prediction_lock(propagateMutex);
+    propagationInitialized = false;
+    imu_odom = OdomData{};
+    lastReadImuStamp = 0.0;
     std::lock_guard<std::mutex> imu_lock(imu_mutex);
     clearBuffer(imuBuffer);
   }
@@ -33,7 +42,6 @@ void Estimator::resetState() {
     clearBuffer(featureBuffer);
   }
 
-  std::lock_guard<std::mutex> lock(processingMutex);
   previousTimestamp = -1;
   currentTimestamp = 0;
   openExEstimation = 0;
@@ -123,14 +131,15 @@ void Estimator::inputImage(const ImageData &image) {
 }
 
 void Estimator::inputIMU(const IMUData &imu) {
+  std::lock_guard<std::mutex> prediction_lock(propagateMutex);
   {
     std::lock_guard<std::mutex> lock(imu_mutex);
     imuBuffer.push(imu);
   }
   imuCondition.notify_all();
 
-  if (solver_flag == SolverState::NON_LINEAR) {
-    fastPredictIMU(imu);
+  if (propagationInitialized && fastPredictIMU(imu)) {
+    storeImuPrediction();
   }
 }
 
@@ -455,7 +464,7 @@ void Estimator::processNonLinearSolver(Timestamp timestamp) {
   featureManager.removeOutlier(removeIndex);
   if (failureDetection()) {
     failure_occur = 1;
-    resetState();
+    resetStateLocked();
     initializeCamerasFromOptions();
     return;
   }
@@ -1290,10 +1299,12 @@ void Estimator::getPoseInWorldFrame(int index, Eigen::Matrix4d &T) {
 }
 
 bool Estimator::getIntegratedImuOdom(OdomData &data) {
-  if (!safe_imu_pre_odom.check()) {
+  std::lock_guard<std::mutex> lock(propagateMutex);
+  if (imu_odom.timestamp <= lastReadImuStamp) {
     return false;
   }
-  safe_imu_pre_odom.get(data);
+  data = imu_odom;
+  lastReadImuStamp = data.timestamp;
   return true;
 }
 bool Estimator::getVisualInertialOdom(OdomData &data) {
@@ -1456,12 +1467,12 @@ void Estimator::outliersRejection(set<int> &removeIndex) {
   }
 }
 
-void Estimator::fastPredictIMU(const IMUData &data) {
-  std::lock_guard<std::mutex> lock(propagateMutex);
-  double dt = data.timestamp - latestImuData.timestamp;
+bool Estimator::fastPredictIMU(const IMUData &data) {
+  const double dt = data.timestamp - latestImuData.timestamp;
+  if (!(dt > 0.0)) return false;
   if (dt > 1.0) {
     VINS_ERROR << "Abnormal IMU timestamp jump detected: " << dt;
-    return;
+    return false;
   }
   Eigen::Vector3d un_acc_0 =
       latest_Q * (latestImuData.linear_acceleration - latest_state.accel_bias) -
@@ -1478,27 +1489,37 @@ void Estimator::fastPredictIMU(const IMUData &data) {
   latest_state.velocity = latest_state.velocity + dt * un_acc;
 
   latestImuData = data;
-  imu_odom.timestamp = data.timestamp;
+  return true;
+}
+
+void Estimator::storeImuPrediction() {
+  if (latestImuData.timestamp < imu_odom.timestamp) return;
+  imu_odom.timestamp = latestImuData.timestamp;
   imu_odom.position = latest_state.position;
   imu_odom.velocity = latest_state.velocity;
   imu_odom.orientation = latest_Q;
-  safe_imu_pre_odom.set(imu_odom);
 }
 
 void Estimator::updateLatestStates() {
+  if (!options->hasImu()) return;
+  std::lock_guard<std::mutex> prediction_lock(propagateMutex);
   latest_state = estimator_state[frameCount];
   latest_Q = latest_state.rotation;
   latestImuData = previousImuData;
-  latestImuData.timestamp =
-      estimator_state[frameCount].timestamp + options->time_delay;
+  const double baseStamp = latest_state.timestamp + options->time_delay;
+  latestImuData.timestamp = baseStamp;
 
   queue<IMUData> tmp_imu;
   {
     std::lock_guard<std::mutex> imu_lock(imu_mutex);
     tmp_imu = imuBuffer;
   }
+  propagationInitialized = true;
+  bool haveImuSample = previousImuData.timestamp == baseStamp;
   while (!tmp_imu.empty()) {
-    fastPredictIMU(tmp_imu.front());
+    if (fastPredictIMU(tmp_imu.front())) haveImuSample = true;
     tmp_imu.pop();
   }
+  // A visual correction is visible only after replay catches up to a real IMU sample.
+  if (haveImuSample) storeImuPrediction();
 }
