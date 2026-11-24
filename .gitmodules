@@ -1,0 +1,3 @@
+[submodule "src/ego-planner-swarm"]
+	path = src/ego-planner-swarm
+	url = git@github.com:Spaaaace-yyj/ego-planner-swarm.git
