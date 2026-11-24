@@ -1,0 +1,8 @@
+localization:
+  config_package: bringup
+  config_file: config/localization.yaml
+
+control:
+  config_package: px4_control
+  config_file: config/px4_control_vins_fusion.yaml
+  use_sim_time: false

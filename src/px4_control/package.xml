@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>px4_hover</name>
+  <name>px4_control</name>
   <version>0.2.0</version>
   <description>C++ VINS external vision bridge and explicit PX4 v1.14 hover state machine.</description>
   <maintainer email="Spaaaace-yyj@users.noreply.github.com">Spaaaace-yyj</maintainer>

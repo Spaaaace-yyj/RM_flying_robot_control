@@ -95,13 +95,17 @@ def _launch_setup(context):
         },
     )
     d435_launch = _include("d435_bringup", "d435.launch.py", {"config_file": camera_config})
+    local_frame = config["vins_fusion"].get("world_frame_id", "world")
+    publish_identity = config["vins_fusion"].get("publish_identity_world_to_odom", False)
+    if not isinstance(publish_identity, bool) or (publish_identity and local_frame != "odom"):
+        raise ValueError("Identity world-to-odom requires world_frame_id: odom")
     vins_fusion_node = Node(
         package="vins_fusion_ros2",
         executable="vins_fusion_ros2_node",
         name="vins_fusion_ros2_node",
         output="screen",
         emulate_tty=True,
-        parameters=[{"config_file": vins_config, "use_sim_time": use_sim_time}],
+        parameters=[{"config_file": vins_config, "use_sim_time": use_sim_time, "world_frame_id": local_frame}],
     )
     # Use wall time so startup does not depend on /clock.
     start_vins_fusion = (
@@ -117,6 +121,13 @@ def _launch_setup(context):
         d435_launch,
         start_vins_fusion,
     ]
+
+    if publish_identity:
+        actions.append(Node(
+            package="tf2_ros", executable="static_transform_publisher",
+            name="world_to_odom", arguments=["--frame-id", "world", "--child-frame-id", "odom"],
+            parameters=[{"use_sim_time": use_sim_time}],
+        ))
 
     # Optional for existing custom localization YAMLs; enabled in the shipped profile.
     visualization = config.get("visualization", {})

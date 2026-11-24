@@ -10,7 +10,7 @@
 #include <string>
 #include <utility>
 
-namespace px4_hover
+namespace px4_control
 {
     using Vec3 = Eigen::Vector3d;
     using Quat = Eigen::Quaterniond;
@@ -178,4 +178,4 @@ namespace px4_hover
     std::string jsonString(const std::string& value);
     std::string jsonNumber(double value);
     std::string jsonVector(const Vec3& value);
-} // namespace px4_hover
+} // namespace px4_control

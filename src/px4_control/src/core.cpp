@@ -1,4 +1,4 @@
-#include "px4_hover/core.hpp"
+#include "px4_control/core.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -6,7 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace px4_hover
+namespace px4_control
 {
     namespace
     {
@@ -535,4 +535,4 @@ namespace px4_hover
     {
         return "[" + jsonNumber(value.x()) + "," + jsonNumber(value.y()) + "," + jsonNumber(value.z()) + "]";
     }
-} // namespace px4_hover
+} // namespace px4_control

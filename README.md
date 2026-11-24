@@ -5,7 +5,7 @@
 → PX4 原有多旋翼控制器闭环，实现有限高度内的原地悬停。
 
 > **文档说明**：本文档是仓库唯一的说明文档。原先分散在各包内的 README
-> （`px4_hover`、`driver_interface`、`mindvision_camera`）以及 `docs/PX4_HOVER.md`、
+> （`px4_control`、`driver_interface`、`mindvision_camera`）以及 `docs/PX4_HOVER.md`、
 > `docs/CPP_MIGRATION.md` 的内容已全部合并到这里，那些文件已删除。
 > 第三方代码 `src/px4_msgs` 与 `src/VINS-Mono` 保留各自的上游文档。
 
@@ -20,7 +20,7 @@
 - [7. 实机启动与显式控制](#7-实机启动与显式控制)
 - [8. mindvision_camera：相机驱动](#8-mindvision_camera相机驱动)
 - [9. driver_interface：传感器接口](#9-driver_interface传感器接口)
-- [10. px4_hover：悬停管理器](#10-px4_hover悬停管理器)
+- [10. px4_control：悬停管理器](#10-px4_control悬停管理器)
 - [11. 分阶段验收和日志](#11-分阶段验收和日志)
 - [12. 已验证与尚未验证](#12-已验证与尚未验证)
 - [13. C++ 迁移说明](#13-c-迁移说明)
@@ -38,14 +38,14 @@
 | --- | --- |
 | `src/mindvision_camera` | 迈德威视工业相机驱动；输出格式/帧率/QoS 可配，直接输出 `mono8` |
 | `src/driver_interface` | 图像灰度桥接（可关闭）+ PX4 `SensorCombined` → `sensor_msgs/Imu` |
-| `src/px4_hover` | VINS → PX4 外部定位桥接、就绪检查、显式起飞/接管/降落状态机 |
+| `src/px4_control` | VINS → PX4 外部定位桥接、就绪检查、显式起飞/接管/降落状态机 |
 | `src/drone_visualization` | 里程计位姿 → 简易四旋翼 MarkerArray，供 Foxglove / RViz 3D 显示 |
-| `src/bringup` | 总启动包：`localization`、`hover_test`、`hover_system`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
+| `src/bringup` | 总启动包：`localization`、`onboard_control`、`vins_system`、`vins_system_sim`、`px4_xrce_agent` |
 | `src/px4_msgs` | PX4 v1.14 消息定义（以源码 vendored，非子模块） |
 | `src/VINS-Mono` | 普通源码目录，由外层 Git 直接管理；ROS 2 移植版，导入自 `ec59526` |
 | `Camera/` | 相机录制数据（`.mvdat`，被 `.gitignore` 忽略） |
 
-`px4_hover` 已改为 **C++17 / rclcpp / Eigen3**，运行时不依赖 Python/numpy；
+`px4_control` 已改为 **C++17 / rclcpp / Eigen3**，运行时不依赖 Python/numpy；
 launch 和参数接口保持不变。升级方法见 [13. C++ 迁移说明](#13-c-迁移说明)。
 
 ## 2. 数据链路与坐标系
@@ -53,7 +53,7 @@ launch 和参数接口保持不变。升级方法见 [13. C++ 迁移说明](#13-
 ```mermaid
 flowchart TD
   S[相机与 PX4 IMU] --> V[VINS 连续局部定位]
-  V --> B[px4_hover 定位桥接与状态机]
+  V --> B[px4_control 定位桥接与状态机]
   B --> E[PX4 EKF2]
   E --> C[PX4 位置和姿态控制器]
   B --> C
@@ -142,7 +142,7 @@ rosdep install \
   -y
 ```
 
-另外需要 `libeigen3-dev`、`ros-humble-ament-cmake-test`（`px4_hover` 核心测试）：
+另外需要 `libeigen3-dev`、`ros-humble-ament-cmake-test`（`px4_control` 核心测试）：
 
 ```bash
 sudo apt install libeigen3-dev ros-humble-ament-cmake-test
@@ -194,7 +194,7 @@ PX4 v1.14.3 默认 `src/modules/uxrce_dds_client/dds_topics.yaml` 已有传感�
     type: px4_msgs::msg::VehicleCommandAck
 ```
 
-可参考 `src/px4_hover/config/px4_dds_additions.yaml`，**不是用该文件覆盖整个 DDS
+可参考 `src/px4_control/config/px4_dds_additions.yaml`，**不是用该文件覆盖整个 DDS
 文件，也不是 ROS 参数文件**。保留原有发布/订阅条目，使用自己板型对应的构建目标
 重新编译并刷入固件。这里不提供未知板型的刷写命令。确认串口、921600 波特率与
 飞控 uxrce_dds_client 的链路设置一致，且只运行一个 agent。
@@ -276,35 +276,25 @@ save_image: 0
 
 ## 7. 实机启动与显式控制
 
-复制 `src/px4_hover/config/px4_hover.yaml` 到你维护的配置目录。所有管理器参数都
-在其中，launch 只传入该路径。另保留单独的传感器 YAML 和 VINS OpenCV YAML。
+D435 与 VINS-Fusion 使用上位机总入口。构建前先拉取已锁定的 EGO ROS 2 子模块。
 
 ```bash
+git submodule update --init --recursive
 source /opt/ros/humble/setup.bash
+colcon build --executor sequential --packages-up-to bringup --cmake-args -DBUILD_TESTING=OFF
 source install/setup.bash
-ros2 launch bringup hover_system.launch.py \
-  vins_config_file:=/绝对路径/你的实机标定.yaml \
-  hover_config_file:=/绝对路径/px4_hover.yaml \
-  agent_device:=/dev/ttyUSB0 agent_baud:=921600
+ros2 launch bringup onboard_control.launch.py
 ```
 
-| launch 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| `vins_config_file` | 无（必填） | 实机标定的 OpenCV YAML 绝对路径 |
-| `hover_config_file` | `px4_hover/config/px4_hover.yaml` | 管理器参数文件 |
-| `sensor_config_file` | `bringup/config/camera_interface.yaml` | 相机 + 接口共用的多节点 YAML |
-| `use_rviz` | `false` | 是否启动 RViz2 |
-| `start_agent` | `true` | 是否启动 `MicroXRCEAgent` |
-| `agent_device` / `agent_baud` | `/dev/ttyUSB0` / `921600` | 串口 agent 设备与波特率 |
-
-串口 agent 已经启动时加 `start_agent:=false`。此实机 launch 强制
-`use_sim_time=false`，不启动回环；不要同时启动旧的 `vins_system.launch.py`。
+总入口包含定位、PX4 接口和 EGO 规划预览。原悬停服务已迁到
+`/px4_control/{takeoff,hold,land,reset}`。测试单个 Mono 定位流程时可单独使用
+`vins_system.launch.py` 和 `px4_control.launch.py` 的 Mono 参数。
 
 另一终端观察：
 
 ```bash
 source install/setup.bash
-ros2 topic echo /px4_hover/status
+ros2 topic echo /px4_control/status
 ros2 topic hz /vins_estimator/odometry
 ros2 topic hz /vins_estimator/imu_propagate
 ros2 topic hz /fmu/in/vehicle_visual_odometry
@@ -318,7 +308,7 @@ ros2 topic info -v /fmu/in/offboard_control_mode
 默认 `allow_arm_requests: false`：READY 后由 RC 解锁，再显式调用：
 
 ```bash
-ros2 service call /px4_hover/takeoff std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/takeoff std_srvs/srv/Trigger '{}'
 ```
 
 会先发送 1.5 秒位置目标和心跳，再请求 Offboard，实际状态确认后开始限速爬升。
@@ -328,20 +318,20 @@ ros2 service call /px4_hover/takeoff std_srvs/srv/Trigger '{}'
 已经由 RC 起飞、速度低于 `max_start_speed` 时，用 hold 接管当前悬停点：
 
 ```bash
-ros2 service call /px4_hover/hold std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/hold std_srvs/srv/Trigger '{}'
 ```
 
 降落：
 
 ```bash
-ros2 service call /px4_hover/land std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/land std_srvs/srv/Trigger '{}'
 ```
 
 这是 AUTO.LAND 请求，不是上位机自行闭环降落。遥控切出 Offboard 后管理器不再
 自动抢回，后续操作由 RC/PX4 完成。复飞前地面上锁，必要时恢复/重启 VINS，再：
 
 ```bash
-ros2 service call /px4_hover/reset std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/reset std_srvs/srv/Trigger '{}'
 ```
 
 管理器不能直接重启相机/IMU/VINS 的其他进程；它负责监测、拒绝无效定位与协调
@@ -468,7 +458,7 @@ ros2 topic hz /px4/imu
 | `d435_bringup/config/d435.yaml` | 相机流、分辨率、帧率、曝光和 QoS |
 | `vins_fusion_ros2/config/euroc/euroc_d435_imu_config.yaml` | 图像/IMU 话题、双目内外参引用和 VINS 参数 |
 | `bringup/config/localization.yaml` → `vins_fusion.use_sim_time` | 默认 `false`，使用实机时间 |
-| `bringup/config/localization.yaml` → `vins_fusion.startup_delay_s` | 仅延迟 VINS-Fusion，默认 8 秒，设为 `0` 立即启动。`hover_test` 继承此设置。旧自定义 YAML 省略该项时仍立即启动。 |
+| `bringup/config/localization.yaml` → `vins_fusion.startup_delay_s` | 仅延迟 VINS-Fusion，默认 8 秒，设为 `0` 立即启动。`onboard_control` 继承此设置。旧自定义 YAML 省略该项时仍立即启动。 |
 | `drone_visualization/config/drone_visualization.yaml` | 模型输入话题、刷新率、尺寸、颜色和过期时间 |
 
 串口值沿用现有 agent launch 的默认设置，需与飞控一致。相机和 IMU 参数保持
@@ -511,17 +501,49 @@ ros2 topic hz /camera/camera/infra2/image_rect_raw
 ros2 node info /vins_fusion_ros2_node
 ```
 
+### 坐标系与 EGO 规划预览
+
+默认 `world → odom` 为单位变换。接入全局纠偏后，将 `localization.yaml` 的
+`publish_identity_world_to_odom` 改为 false，由纠偏节点独占这条边。VINS 发布
+`odom → body → camera`；`camera` 是标定使用的旋转后 infra2。深度适配器用
+RealSense 的物理 infra2 到设备根的 TF 计算 `camera → camera_link`。
+D435 配置对应 RealSense ROS 4.58.4，未对齐彩色，驱动旋转 180°。该版本在宽度
+不变时沿用原物理光学系的 CameraInfo。适配器将深度像素旋回物理方向，保留设备内参，
+按曝光时间等待 TF，输出同一时间戳的 `/ego_input/{depth,camera_info,camera_pose}`。
+更换镜头、驱动或翻转设置时，核对光学轴、图像和 CameraInfo 的约定。
+
+EGO 使用 `/imu_propagate` 和上述三个话题。可在 Foxglove 中选择 `odom`，观察
+`/ego_preview/grid_map/occupancy_inflate` 与 `/ego_preview/optimal_list`。
+`/ego_preview/goal` 接收 odom 系的 PoseStamped，规划结果发布在
+`/ego_preview/planning/bspline`，用于观察。规划预览与 PX4 控制服务独立。
+
+录包时保存深度 image_rect_raw、depth/camera_info、/tf、/tf_static、
+/imu_propagate。回放已经包含相机桥接 TF 的录包：
+
+```bash
+ros2 launch bringup ego_preview.launch.py use_sim_time:=true publish_camera_bridge:=false
+# 另一终端
+ros2 bag play BAG --clock --topics /tf /tf_static /imu_propagate /camera/camera/depth/image_rect_raw /camera/camera/depth/camera_info
+```
+
+A7Z 镜像沿用 compose 中的镜像名。原生 ARM64 主机上执行：
+
+```bash
+git submodule update --init --recursive
+docker build -f Dockerfile.a7z --build-arg BUILD_JOBS=2 -t rm-flight:humble-arm64-v4 .
+```
+
 ### 7.4 VINS-Fusion 悬停测试
 
-`hover_test.launch.py` 复用 `localization.launch.py` 启动 PX4 串口、IMU 接口、
-D435、VINS-Fusion，并复用 `px4_hover.launch.py` 启动悬停管理器。
-启动入口只接受一个 `config_file`，默认读取 `bringup/config/hover_test.yaml`：
+`onboard_control.launch.py` 复用 `localization.launch.py` 启动 PX4 串口、IMU 接口、
+D435、VINS-Fusion，并复用 `px4_control.launch.py` 启动悬停管理器。
+启动入口只接受一个 `config_file`，默认读取 `bringup/config/onboard_control.yaml`：
 
 | 配置项 | 默认引用 |
 | --- | --- |
 | `localization` | `bringup/config/localization.yaml`，包含串口配置和相机/IMU/VINS 参数路径 |
-| `hover` | `px4_hover/config/px4_hover_vins_fusion.yaml`，包含 Fusion 订阅与悬停参数 |
-| `hover.use_sim_time` | `false`，使用实机时间 |
+| `control` | `px4_control/config/px4_control_vins_fusion.yaml`，包含 Fusion 订阅与悬停参数 |
+| `control.use_sim_time` | `false`，使用实机时间 |
 
 路径解析方式与第 7.3 节相同。两个子 launch 的 `config_file` 独立作用，
 可以把定位与悬停配置分别替换成自己的文件。
@@ -534,13 +556,13 @@ D435、VINS-Fusion，并复用 `px4_hover.launch.py` 启动悬停管理器。
 | `vins_state_topic` | `/imu_propagate` | IMU 前向传播状态，向 PX4 提供连续外部定位 |
 | `vins_backend_topic` | `/odometry` | 检查视觉后端是否持续产生新时间戳 |
 | `vins_restart_topic` | 空字符串 | 此 Fusion 移植未发布重启 Bool，关闭该可选订阅 |
-| `vins_world_frame` | `world` | 检查定位消息的参考系 |
+| `vins_world_frame` | `odom` | 检查定位消息的参考系 |
 | `vins_velocity_frame` | `world` | 按 Fusion 源码的世界系速度处理，保留现有 NED/机体系转换 |
 
 Fusion 的 `child_frame_id=body` 不改变其速度字段在源码中的表达坐标系。
 时间戳、重复旧数据、定位超时、视觉后端停更、位置/航向跳变及 PX4 融合检查继续生效。
 Fusion 未提供独立重启通知；接入自定义重启 Bool 时可填写 `vins_restart_topic`。
-原来的 `px4_hover.yaml` 和 `hover_system.launch.py` 继续供 VINS-Mono 使用。
+Mono 单独启动使用 `px4_control.yaml`，Fusion 总入口使用 `px4_control_vins_fusion.yaml`。
 
 已有依赖与定位程序的环境中，更新以下包（Docker 中在 `/ws` 执行）：
 
@@ -548,28 +570,28 @@ Fusion 未提供独立重启通知；接入自定义重启 Bool 时可填写 `vi
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-colcon build --executor sequential --packages-select drone_visualization px4_hover bringup \
+colcon build --executor sequential --packages-up-to bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source install/setup.bash
-ros2 launch bringup hover_test.launch.py
+ros2 launch bringup onboard_control.launch.py
 ```
 
 使用自定义总配置：
 
 ```bash
-ros2 launch bringup hover_test.launch.py config_file:=/绝对路径/hover_test.yaml
+ros2 launch bringup onboard_control.launch.py config_file:=/绝对路径/onboard_control.yaml
 ```
 
 该入口保持显式飞行操作，启动后先观察：
 
 ```bash
-ros2 topic echo /px4_hover/status
+ros2 topic echo /px4_control/status
 ros2 topic hz /fmu/in/vehicle_visual_odometry
 ```
 
 PX4 EKF2 外部视觉融合参数按第 5 节配置。固件 DDS 还需发布
 `estimator_status_flags`，以及用于命令应答的 `vehicle_command_ack`；合并示例见
-`src/px4_hover/config/px4_dds_additions.yaml`。缺少前者时，默认健康检查会等待，
+`src/px4_control/config/px4_dds_additions.yaml`。缺少前者时，默认健康检查会等待，
 诊断原因会显示 `missing estimator_status_flags`。
 
 PX4 v1.14 中，`vehicle_status` 稳态约 2 Hz，`estimator_status_flags` 稳态约 1 Hz，
@@ -579,7 +601,7 @@ PX4 v1.14 中，`vehicle_status` 稳态约 2 Hz，`estimator_status_flags` 稳�
 和消息时间戳，不关闭 DDS 时钟或 EKF2 外部视觉融合检查。
 
 已收到但过期的消息会报告对应话题的 `receive timeout` 或 `timestamp too old`，
-不会再误报为缺少话题或笼统的 DDS 同步失败。`/px4_hover/status` 增加
+不会再误报为缺少话题或笼统的 DDS 同步失败。`/px4_control/status` 增加
 `vehicle_status_rx_age_s`、`vehicle_status_timestamp_age_s`、
 `estimator_status_rx_age_s`、`estimator_status_timestamp_age_s`、
 `timesync_rx_age_s` 和 `timesync_round_trip_ms`，便于区分低频发布、传输延迟和时钟异常。
@@ -587,20 +609,20 @@ PX4 v1.14 中，`vehicle_status` 稳态约 2 Hz，`estimator_status_flags` 稳�
 等待 `READY` 后，默认 `allow_arm_requests: false`，由遥控先解锁，再显式调用：
 
 ```bash
-ros2 service call /px4_hover/takeoff std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/takeoff std_srvs/srv/Trigger '{}'
 ```
 
 需要降落时单独请求 PX4 执行：
 
 ```bash
-ros2 service call /px4_hover/land std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/land std_srvs/srv/Trigger '{}'
 ```
 
 `hold`、`reset` 的条件和使用方式与第 7 节一致。
 
 ### 7.5 Foxglove 3D 无人机位置模型
 
-`localization` / `hover_test` 默认启动 `drone_visualization/odometry_drone_marker`。
+`localization` / `onboard_control` 默认启动 `drone_visualization/odometry_drone_marker`。
 它订阅 `/imu_propagate`（`nav_msgs/msg/Odometry`），最多以 20 Hz 发布
 `/drone/markers`（`visualization_msgs/msg/MarkerArray`）。模型包括机身、四根机臂、
 四个电机/旋翼及机头箭头；橙色为机头和前旋翼，蓝色为后旋翼。模型同时跟随位置
@@ -635,7 +657,7 @@ ros2 launch drone_visualization drone_visualization.launch.py \
 
 只使用 5 个固定 ID 的基本图形 Marker，避免累积历史模型。更新停顿或时间戳过期
 超过 `stale_timeout`（默认 0.5 s）时隐藏模型，恢复新鲜数据后自动重现。
-模型显示 VINS 位姿，飞控融合和控制就绪状态仍看 `/px4_hover/status`。
+模型显示 VINS 位姿，飞控融合和控制就绪状态仍看 `/px4_control/status`。
 将 `localization.yaml` 的 `visualization.enabled` 改为 `false` 可关闭；旧的自定义总
 配置未包含此节时仍按原样启动。
 
@@ -956,7 +978,7 @@ ros2 topic echo /px4/imu --once --field header.stamp
 与实际安装和外参标定一致；陀螺仪单位是否为 rad/s；加速度单位是否为 m/s² 且包含
 重力；相机—IMU 外参和相机内参是否正确。
 
-## 10. px4_hover：悬停管理器
+## 10. px4_control：悬停管理器
 
 面向本仓库 `main`、Ubuntu 22.04 / ROS 2 Humble、PX4 v1.14.3 和匹配的
 `px4_msgs release/1.14`。这是显式操作的悬停管理器：启动只传外部定位，
@@ -964,8 +986,8 @@ ros2 topic echo /px4/imu --once --field header.stamp
 
 运行节点使用 `rclcpp`，矩阵和四元数使用 Eigen3；状态机、VINS 校验和消息桥接
 均为 C++，不依赖 Python/numpy。launch 仍采用 ROS 2 的 Python 启动文件。
-源码分为 `include/px4_hover/core.hpp`、`src/core.cpp` 和
-`src/px4_hover_node.cpp`。所有参数为启动配置，运行中设为只读；改 YAML 后重启节点。
+源码分为 `include/px4_control/core.hpp`、`src/core.cpp` 和
+`src/px4_control_node.cpp`。所有参数为启动配置，运行中设为只读；改 YAML 后重启节点。
 
 ### 10.1 输入与输出
 
@@ -984,7 +1006,7 @@ ros2 topic echo /px4/imu --once --field header.stamp
 | `/fmu/in/offboard_control_mode` | 50 Hz 位置模式心跳，只在显式控制阶段发送 |
 | `/fmu/in/trajectory_setpoint` | 固定 XY 和 yaw，Z 按限速爬升到相对起飞高度 |
 | `/fmu/in/vehicle_command` | 有限重试的模式切换、可选解锁、降落请求 |
-| `/px4_hover/status` | JSON 状态和具体未就绪/故障原因，5 Hz |
+| `/px4_control/status` | JSON 状态和具体未就绪/故障原因，5 Hz |
 
 本仓库 VINS 写入的线速度是 **world 系速度**，虽然普通 odometry 的
 `child_frame_id=body`。因此默认 `vins_velocity_frame: world`，不要按 child frame
@@ -1001,11 +1023,11 @@ xyzw 转成 PX4 的 wxyz。输入 IMU 已由 `driver_interface` 从 PX4 FRD 转�
 → TAKEOFF → HOVER`。另有 `MANUAL`、`FAULT`、`LANDING`。
 
 ```bash
-ros2 topic echo /px4_hover/status
-ros2 service call /px4_hover/takeoff std_srvs/srv/Trigger '{}'
-ros2 service call /px4_hover/hold std_srvs/srv/Trigger '{}'
-ros2 service call /px4_hover/land std_srvs/srv/Trigger '{}'
-ros2 service call /px4_hover/reset std_srvs/srv/Trigger '{}'
+ros2 topic echo /px4_control/status
+ros2 service call /px4_control/takeoff std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/hold std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/land std_srvs/srv/Trigger '{}'
+ros2 service call /px4_control/reset std_srvs/srv/Trigger '{}'
 ```
 
 - `takeoff`：从当前 PX4 局部位置上升 `takeoff_height`，不是离地绝对高度。
@@ -1028,7 +1050,7 @@ VINS/PX4 消息超时、时间倒退、异常跳变、飞控位置重置、控�
 
 ### 10.3 默认门限和配置
 
-`config/px4_hover.yaml` 包含全部管理器参数，可以复制到 `bringup/config` 自行维护。
+`config/px4_control.yaml` 包含全部管理器参数，可以复制到 `bringup/config` 自行维护。
 
 | 参数 | 默认 | 含义 |
 | --- | --- | --- |
@@ -1060,14 +1082,14 @@ VINS/PX4 消息超时、时间倒退、异常跳变、飞控位置重置、控�
 传感器、VINS 和 agent 已启动时，只运行管理器，避免重复节点：
 
 ```bash
-ros2 launch px4_hover px4_hover.launch.py config_file:=/绝对路径/px4_hover.yaml
+ros2 launch px4_control px4_control.launch.py config_file:=/绝对路径/px4_control.yaml
 ```
 
 不用 ROS 的原生 C++ 核心测试（已安装 `libeigen3-dev`）：
 
 ```bash
-cmake -S src/px4_hover -B build/hover_core \
-  -DPX4_HOVER_CORE_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S src/px4_control -B build/hover_core \
+  -DPX4_CONTROL_CORE_ONLY=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/hover_core -j4
 ctest --test-dir build/hover_core --output-on-failure
 ./build/hover_core/hover_core_test
@@ -1076,11 +1098,11 @@ ctest --test-dir build/hover_core --output-on-failure
 ROS 工作空间测试：
 
 ```bash
-colcon test --packages-select px4_hover --event-handlers console_direct+
+colcon test --packages-select px4_control --event-handlers console_direct+
 colcon test-result --verbose
 ```
 
-核心用例位于 `src/px4_hover/test/test_core.cpp`，覆盖四元数归一化与非法值拒绝、
+核心用例位于 `src/px4_control/test/test_core.cpp`，覆盖四元数归一化与非法值拒绝、
 对齐 yaw/原点与 world/body 速度、安装旋转、VINS 看门狗（预热、后端超时、重复
 时间戳、帧不匹配、位置/航向跳变、时钟回退、tracker 重启锁定）、状态机（默认不
 解锁、无启动心跳、显式解锁时序、hold 目标冻结、ROS 时钟暂停不爬升、意外上锁不
@@ -1097,7 +1119,7 @@ Z 减小、姿态轴和 EKF EV flags。检查飞控实际接受外部定位，�
 ```bash
 ros2 bag record -o hover_test \
   /px4/imu /vins_estimator/odometry /vins_estimator/imu_propagate \
-  /feature_tracker/restart /px4_hover/status \
+  /feature_tracker/restart /px4_control/status \
   /fmu/in/vehicle_visual_odometry /fmu/in/offboard_control_mode \
   /fmu/in/trajectory_setpoint /fmu/in/vehicle_command \
   /fmu/out/vehicle_status /fmu/out/vehicle_attitude \
@@ -1117,7 +1139,7 @@ frame 时序、失联与接管结果。短时没发散不代表精度或飞行�
 
 已知通过的范围：
 
-- 36 项 `px4_hover` 原生 C++ 核心用例、Release/CTest，以及
+- 36 项 `px4_control` 原生 C++ 核心用例、Release/CTest，以及
   AddressSanitizer/UndefinedBehaviorSanitizer 检查通过；受环境限制未运行
   LeakSanitizer，因此不声称做过内存泄漏检查。
 - 1000 组随机坐标转换数据与旧 Python 实现对照一致，最大绝对误差约 `6.7e-15`。
@@ -1126,7 +1148,7 @@ frame 时序、失联与接管结果。短时没发散不代表精度或飞行�
 
 本工作空间的现状：
 
-- `build/px4_hover/colcon_build.rc` 为 `0`，`install/px4_hover/lib/px4_hover/px4_hover_node`
+- `build/px4_control/colcon_build.rc` 为 `0`，`install/px4_control/lib/px4_control/px4_control_node`
   是指向 ELF 可执行文件的符号链接，说明 **ROS 2 C++ 适配层在本机编译通过**。
 - 但 `log/` 下没有 `colcon test` 结果记录，且当前环境没有真实飞控：
   **DDS 通信、完整 VINS+图像渲染闭环、EKF2 融合及实机飞行尚未验证**。
@@ -1166,19 +1188,19 @@ MuJoCo 控制/桥接代码原来就为 C++，消息接口无需再迁移。如�
 
 ### 13.2 清理旧包产物与编译
 
-默认 colcon 是分包安装。确认停止旧 `px4_hover` 进程后，在控制工作空间根目录：
+默认 colcon 是分包安装。确认停止旧 `px4_control` 进程后，在控制工作空间根目录：
 
 ```bash
 conda deactivate
 source /opt/ros/humble/setup.bash
 sudo apt install libeigen3-dev ros-humble-ament-cmake-test
 # 只清理这个包的生成产物，不删除 src 或其他包；适用于默认分包 install
-rm -rf build/px4_hover install/px4_hover
+rm -rf build/px4_control install/px4_control
 colcon build --symlink-install --packages-up-to bringup vins_estimator \
   --cmake-args -DCMAKE_BUILD_TYPE=Release \
   -DPython3_EXECUTABLE=/usr/bin/python3 -DPYTHON_EXECUTABLE=/usr/bin/python3
 source install/setup.bash
-file "$(ros2 pkg prefix px4_hover)/lib/px4_hover/px4_hover_node"
+file "$(ros2 pkg prefix px4_control)/lib/px4_control/px4_control_node"
 ```
 
 `file` 应指向 ELF 可执行程序，而不是 Python 脚本。如果使用 `--merge-install`，
@@ -1188,10 +1210,10 @@ file "$(ros2 pkg prefix px4_hover)/lib/px4_hover/px4_hover_node"
 # 已 source 现有依赖工作空间后，将新包构建为独立 overlay
 colcon --log-base log_hover_cpp build \
   --build-base build_hover_cpp --install-base install_hover_cpp \
-  --packages-select px4_hover --allow-overriding px4_hover \
+  --packages-select px4_control --allow-overriding px4_control \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install_hover_cpp/setup.bash
-file "$(ros2 pkg prefix px4_hover)/lib/px4_hover/px4_hover_node"
+file "$(ros2 pkg prefix px4_control)/lib/px4_control/px4_control_node"
 ```
 
 所有操作终端都 source 新 overlay；模拟器终端也应使用该 C++ 包的路径。
@@ -1203,14 +1225,12 @@ file "$(ros2 pkg prefix px4_hover)/lib/px4_hover/px4_hover_node"
 
 ```bash
 # 实机
-ros2 launch bringup hover_system.launch.py \
-  vins_config_file:=/绝对路径/你的标定.yaml \
-  hover_config_file:=/绝对路径/px4_hover.yaml
+ros2 launch bringup onboard_control.launch.py
 # 仿真（另一个隔离域/测试过程，不能和真实飞控同域同时运行）
 ros2 launch drone_sim vins_hover.launch.py joy:=false
 ```
 
-二者按测试场景选择其一。状态 `/px4_hover/status`、服务 `/takeoff` `/hold` `/land`
+二者按测试场景选择其一。状态 `/px4_control/status`、服务 `/takeoff` `/hold` `/land`
 `/reset` 及参数名保持原样。启动不会自动解锁，实机默认不允许节点发解锁命令。
 仍须初始化 VINS、确认 READY、显式操作。具体顺序见第 7 节。
 
@@ -1218,11 +1238,11 @@ ros2 launch drone_sim vins_hover.launch.py joy:=false
 
 | 文件 | 职责 |
 | --- | --- |
-| `include/px4_hover/core.hpp` | 状态、配置、观测与动作类型，独立核心接口 |
+| `include/px4_control/core.hpp` | 状态、配置、观测与动作类型，独立核心接口 |
 | `src/core.cpp` | Eigen 坐标/四元数转换，VINS 健康检查，悬停状态机 |
-| `src/px4_hover_node.cpp` | rclcpp 订阅/发布、服务、定时心跳、PX4 状态及诊断 |
+| `src/px4_control_node.cpp` | rclcpp 订阅/发布、服务、定时心跳、PX4 状态及诊断 |
 | `test/test_core.cpp` | 42 项独立核心用例，不依赖 ROS 环境 |
-| `config/px4_hover.yaml` | 保留原参数名与默认值，参数在启动时读取并设为只读 |
+| `config/px4_control.yaml` | 保留原参数名与默认值，参数在启动时读取并设为只读 |
 | `config/px4_dds_additions.yaml` | 需合并进 PX4 固件的 DDS 发布条目（文档性参考） |
 
 节点用 `SingleThreadedExecutor` 和默认回调组串行处理状态。心跳/超时用
@@ -1233,12 +1253,12 @@ numpy。ROS launch、colcon 工具和仿真纹理生成脚本仍按原方案使�
 ### 13.5 验证范围
 
 ```bash
-colcon test --packages-select px4_hover --event-handlers console_direct+
+colcon test --packages-select px4_control --event-handlers console_direct+
 colcon test-result --verbose
 
 # 无 ROS 时验证 C++ 核心
-cmake -S src/px4_hover -B build/hover_core \
-  -DPX4_HOVER_CORE_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S src/px4_control -B build/hover_core \
+  -DPX4_CONTROL_CORE_ONLY=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/hover_core -j4
 ctest --test-dir build/hover_core --output-on-failure
 ./build/hover_core/hover_core_test

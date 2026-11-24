@@ -20,6 +20,8 @@ d435:
   config_file: "config/d435.yaml"
 
 vins_fusion:
+  world_frame_id: odom
+  publish_identity_world_to_odom: true
   # 从启动算起，等待 PX4 DDS 和相机建立数据流。设为 0 可立即启动。
   startup_delay_s: 8.0
   config_package: "vins_fusion_ros2"

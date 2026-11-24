@@ -1,4 +1,4 @@
-#include "px4_hover/core.hpp"
+#include "px4_control/core.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -26,7 +26,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace px4_hover
+namespace px4_control
 {
     using namespace px4_msgs::msg;
     using VinsOdom = nav_msgs::msg::Odometry;
@@ -50,10 +50,10 @@ namespace px4_hover
         }
     } // namespace
 
-    class HoverNode : public rclcpp::Node
+    class Px4ControlNode : public rclcpp::Node
     {
     public:
-        HoverNode() : Node("px4_hover")
+        Px4ControlNode() : Node("px4_control")
         {
             //VINS 的 IMU 前向传播状态，作为外部定位的主要来源
             state_topic_ = parameter<std::string>("vins_state_topic", "/vins_estimator/imu_propagate");
@@ -645,7 +645,7 @@ namespace px4_hover
         rclcpp::Publisher<std_msgs::msg::Int16>::SharedPtr debug_state_num_pub_;
         rclcpp::TimerBase::SharedPtr timer_;
     };
-} // namespace px4_hover
+} // namespace px4_control
 
 int main(int argc, char** argv)
 {
@@ -654,11 +654,11 @@ int main(int argc, char** argv)
     try
     {
         // SingleThreadedExecutor: subscription, service and timer state never races.
-        rclcpp::spin(std::make_shared<px4_hover::HoverNode>());
+        rclcpp::spin(std::make_shared<px4_control::Px4ControlNode>());
     }
     catch (const std::exception& error)
     {
-        RCLCPP_FATAL(rclcpp::get_logger("px4_hover"), "%s", error.what());
+        RCLCPP_FATAL(rclcpp::get_logger("px4_control"), "%s", error.what());
         result = 1;
     }
     // No shutdown arming/disarming command. Stopped heartbeats invoke configured PX4 failsafe.

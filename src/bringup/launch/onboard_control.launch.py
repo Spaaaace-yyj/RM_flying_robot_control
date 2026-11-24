@@ -1,4 +1,4 @@
-"""Start D435/PX4 VINS-Fusion localization and the explicit hover manager."""
+"""Start D435/PX4 VINS-Fusion localization and the PX4 interface and planning preview."""
 
 import os
 from pathlib import Path
@@ -53,15 +53,15 @@ def _launch_setup(context):
         config = yaml.safe_load(stream)
     if not isinstance(config, dict):
         raise ValueError(f"Expected a YAML mapping: {path}")
-    for section in ("localization", "hover"):
+    for section in ("localization", "control"):
         if not isinstance(config.get(section), dict):
             raise ValueError(f"Missing YAML mapping '{section}': {path}")
     localization_config = _config_path(config["localization"], path.parent)
-    hover_config = _config_path(config["hover"], path.parent)
-    use_sim_time = config["hover"]["use_sim_time"]
+    control_config = _config_path(config["control"], path.parent)
+    use_sim_time = config["control"]["use_sim_time"]
     if not isinstance(use_sim_time, bool):
-        raise ValueError("hover.use_sim_time must be a YAML boolean")
-    log_config = LogInfo(msg=f"Hover test configuration: {path}")
+        raise ValueError("control.use_sim_time must be a YAML boolean")
+    log_config = LogInfo(msg=f"Onboard control configuration: {path}")
     localization_launch = _include(
         "bringup",
         "localization.launch.py",
@@ -69,24 +69,46 @@ def _launch_setup(context):
             "config_file": localization_config,
         },
     )
-    hover_launch = _include(
-        "px4_hover",
-        "px4_hover.launch.py",
+    control_launch = _include(
+        "px4_control",
+        "px4_control.launch.py",
         {
-            "config_file": hover_config,
+            "config_file": control_config,
             "use_sim_time": str(use_sim_time).lower(),
         },
     )
-    return [log_config, localization_launch, hover_launch]
+    # Read the matching D435 profile so image pixels and the calibrated optical
+    # frame use the same rotation. Nested mappings also occur in ros2 param dumps.
+    with open(localization_config, encoding="utf-8") as stream:
+        localization = yaml.safe_load(stream)
+    camera_path = _config_path(localization["d435"], Path(localization_config).parent)
+    with open(camera_path, encoding="utf-8") as stream:
+        camera = yaml.safe_load(stream)
+    for entry in camera.values():
+        if isinstance(entry, dict) and "ros__parameters" in entry:
+            camera = entry["ros__parameters"]
+            break
+    rotation = camera.get("rotation_filter", {})
+    enabled = camera.get("rotation_filter.enable", rotation.get("enable", False))
+    angle = camera.get("rotation_filter.rotation", rotation.get("rotation", 0)) if enabled else 0
+    if angle not in (0, 180, -180):
+        raise ValueError("Depth preview supports unrotated or 180-degree D435 calibration")
+    preview_launch = _include(
+        "bringup", "ego_preview.launch.py", {
+            "use_sim_time": str(use_sim_time).lower(),
+            "images_rotated_180": str(abs(angle) == 180).lower(),
+        },
+    )
+    return [log_config, localization_launch, control_launch, preview_launch]
 
 
 def generate_launch_description():
-    default_config = Path(get_package_share_directory("bringup")) / "config" / "hover_test.yaml"
+    default_config = Path(get_package_share_directory("bringup")) / "config" / "onboard_control.yaml"
 
     declare_config_file_cmd = DeclareLaunchArgument(
         "config_file",
         default_value=str(default_config),
-        description="YAML selecting localization and VINS-Fusion hover configurations",
+        description="YAML selecting localization and PX4 control configurations",
     )
 
     launch_setup = OpaqueFunction(function=_launch_setup)

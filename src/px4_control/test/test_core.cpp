@@ -1,10 +1,10 @@
-#include "px4_hover/core.hpp"
+#include "px4_control/core.hpp"
 #include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
 
-using namespace px4_hover;
+using namespace px4_control;
 
 namespace
 {
