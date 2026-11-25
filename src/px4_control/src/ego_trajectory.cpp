@@ -138,7 +138,12 @@ namespace px4_control
         // Fixed-goal mode accepts complete segments only, never a local horizon endpoint for another goal.
         if ((end.position - *goal_).norm() > config_.goal_tolerance || end.velocity.norm() > config_.arrival_speed)
         {
-            const std::string detail = "spline endpoint does not match authorized fixed goal/stop speed";
+            const std::string detail = "spline endpoint does not match authorized fixed goal/stop speed: goal=" +
+                jsonVector(*goal_) + " endpoint=" + jsonVector(end.position) +
+                " position_error_m=" + jsonNumber((end.position - *goal_).norm()) +
+                " terminal_speed_mps=" + jsonNumber(end.velocity.norm()) +
+                " position_tolerance_m=" + jsonNumber(config_.goal_tolerance) +
+                " stop_speed_limit_mps=" + jsonNumber(config_.arrival_speed);
             if (tracking()) { cancel(detail); }
             return {false, detail};
         }

@@ -7,6 +7,7 @@
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int16.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -141,6 +142,7 @@ namespace px4_control
             ego_spline_topic_ = parameter<std::string>("ego/bspline_topic", "/ego_preview/planning/bspline");
             ego_pose_topic_ = parameter<std::string>("ego/depth_pose_topic", "/ego_input/camera_pose");
             ego_heartbeat_topic_ = parameter<std::string>("ego/heartbeat_topic", "/ego_preview/planning/data_display");
+            const auto ego_cancel_topic = parameter<std::string>("ego/cancel_topic", "/ego_preview/planning/cancel");
             ego_config_.max_goal_distance = positiveParameter("ego/max_goal_distance", 3.);
             ego_config_.min_z = parameter<double>("ego/min_goal_z", .3);
             ego_config_.max_z = parameter<double>("ego/max_goal_z", 2.2);
@@ -158,6 +160,7 @@ namespace px4_control
                 if (vio_config_.expected_frame != "odom" || body_velocity_)
                 { throw std::invalid_argument("EGO execution requires odom frame and world VINS velocities"); }
                 ego_goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(ego_goal_topic_, 1);
+                ego_cancel_pub_ = create_publisher<std_msgs::msg::Empty>(ego_cancel_topic, 1);
                 subscribe<geometry_msgs::msg::PoseStamped>("~/goal", rclcpp::QoS(1),
                     [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr m) { onGoal(*m); });
                 subscribe<traj_utils::msg::Bspline>(ego_spline_topic_, rclcpp::QoS(10),
@@ -276,7 +279,7 @@ namespace px4_control
                 if (flight_.state == State::Hover || flight_.state == State::TrackTrajectory)
                 {
                     const auto result = flight_.hold(t, observation(t, rosSeconds()));
-                    if (result.first) { ego_.cancel("operator hold; explicit new goal required"); }
+                    if (result.first) { cancelEgo("operator hold; explicit new goal required"); }
                     return result;
                 }
                 return begin(false);
@@ -285,7 +288,7 @@ namespace px4_control
             {
                 const double t = steadySeconds();
                 const auto result = flight_.land(t, observation(t, rosSeconds()));
-                if (result.first) { ego_.cancel("operator requested LAND"); }
+                if (result.first) { cancelEgo("operator requested LAND"); }
                 return result;
             });
             service("~/reset", [this] { return reset(); });
@@ -588,6 +591,19 @@ namespace px4_control
             else { RCLCPP_WARN(get_logger(), "EGO goal rejected: %s", result.second.c_str()); }
         }
 
+        void notifyPlannerCancel()
+        {
+            if (ego_cancel_pub_ && rclcpp::ok(get_node_base_interface()->get_context()))
+            { ego_cancel_pub_->publish(std_msgs::msg::Empty{}); }
+        }
+
+        void cancelEgo(const std::string& reason)
+        {
+            const bool was_busy = ego_.busy();
+            ego_.cancel(reason);
+            if (was_busy) { notifyPlannerCancel(); }
+        }
+
         void onSpline(const traj_utils::msg::Bspline& m)
         {
             if (!ego_.busy()) { return; } // No automatic execution of preview or old trajectories.
@@ -605,17 +621,22 @@ namespace px4_control
                                        ego_config_.max_velocity, ego_config_.max_acceleration);
                 const auto result = ego_.receive(spline, m.traj_id, stampSeconds(m.start_time),
                     alignment_.worldPosition(o.position), alignment_.worldVector(o.velocity), ros);
+                if (!ego_.busy()) { notifyPlannerCancel(); }
                 ego_event_ = result.second;
                 if (result.first)
                 {
                     planner_rx_ = steady;
                     planner_stamp_ = ros;
+                    const auto end = spline.sample(spline.duration());
+                    RCLCPP_INFO(get_logger(), "EGO spline accepted: id=%ld duration=%.3fs endpoint=%s stop_speed=%.4fm/s",
+                                static_cast<long>(m.traj_id), spline.duration(), jsonVector(end.position).c_str(),
+                                end.velocity.norm());
                 }
                 else { RCLCPP_WARN(get_logger(), "EGO spline: %s", result.second.c_str()); }
             }
             catch (const std::exception& error)
             {
-                ego_.cancel(std::string("invalid EGO spline: ") + error.what());
+                cancelEgo(std::string("invalid EGO spline: ") + error.what());
                 ego_event_ = ego_.reason();
                 RCLCPP_ERROR(get_logger(), "%s", ego_event_.c_str());
             }
@@ -624,6 +645,7 @@ namespace px4_control
         std::optional<Reference> egoReference(double steady, double ros, const Observation& o)
         {
             if (!ego_enabled_) { return std::nullopt; }
+            const bool was_busy = ego_.busy();
             std::optional<Reference> reference;
             if (ego_.busy())
             {
@@ -650,6 +672,7 @@ namespace px4_control
             // Otherwise the existing Flight watchdog keeps ownership of LAND/RC takeover.
             if (!ego_.busy() && flight_.state == State::TrackTrajectory && executionReady(o))
             { flight_.hold(steady, o); }
+            if (was_busy && !ego_.busy()) { notifyPlannerCancel(); }
             return reference;
         }
 
@@ -659,7 +682,7 @@ namespace px4_control
             const auto result = flight_.reset(now, observation(now, rosSeconds()));
             if (result.first)
             {
-                ego_.cancel("operator reset");
+                cancelEgo("operator reset");
                 depth_stamp_ = planner_stamp_ = 0.;
                 depth_rx_ = planner_rx_ = kNever;
                 backend_message_stamp_ = backend_message_rx_ = backend_update_rx_ = kNever;
@@ -696,6 +719,7 @@ namespace px4_control
 
         void tick()
         {
+            if (!rclcpp::ok(get_node_base_interface()->get_context())) { return; }
             const double now = steadySeconds(), ros_now = rosSeconds();
             if (last_ros_ && ros_now < *last_ros_)
             {
@@ -731,6 +755,12 @@ namespace px4_control
             }
             const auto o = observation(now, ros_now);
             const auto reference = egoReference(now, ros_now, o);
+            const std::string ego_state = std::string(ego_.stateName()) + ": " + ego_.reason();
+            if (ego_enabled_ && ego_state != last_ego_print_)
+            {
+                RCLCPP_INFO(get_logger(), "EGO task %s", ego_state.c_str());
+                last_ego_print_ = ego_state;
+            }
             const auto action = flight_.tick(now, ros_now, o);
             if (action.heartbeat)
             {
@@ -827,10 +857,11 @@ namespace px4_control
         EgoConfig ego_config_;
         EgoExecution ego_;
         bool ego_enabled_ = false;
-        std::string ego_goal_topic_, ego_spline_topic_, ego_pose_topic_, ego_heartbeat_topic_, ego_event_;
+        std::string ego_goal_topic_, ego_spline_topic_, ego_pose_topic_, ego_heartbeat_topic_, ego_event_, last_ego_print_;
         double ego_depth_age_ = .8, ego_heartbeat_age_ = .8;
         double depth_stamp_ = 0., planner_stamp_ = 0., depth_rx_ = kNever, planner_rx_ = kNever;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ego_goal_pub_;
+        rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr ego_cancel_pub_;
 
         std::array<double, 4> mounting_{0., 0., 0., 1.};
         std::string state_topic_, backend_topic_, restart_topic_, mode_topic_, clock_guard_, last_print_;
@@ -873,8 +904,12 @@ int main(int argc, char** argv)
     }
     catch (const std::exception& error)
     {
-        RCLCPP_FATAL(rclcpp::get_logger("px4_control"), "%s", error.what());
-        result = 1;
+        // SIGINT can invalidate the context during a graph query in a timer.
+        if (rclcpp::ok())
+        {
+            RCLCPP_FATAL(rclcpp::get_logger("px4_control"), "%s", error.what());
+            result = 1;
+        }
     }
     // No shutdown arming/disarming command. Stopped heartbeats invoke configured PX4 failsafe.
     rclcpp::shutdown();

@@ -527,12 +527,25 @@ ros2 topic echo /px4_control/status
 定位或飞控状态故障沿用原 LAND/失联处理，遥控切出后不自动抢回。
 当前只接受终点匹配授权目标的完整轨迹段，不支持长航程、途经点队列或摇杆连续导航。
 
+执行配置启用 `optimization/fixed_terminal: true`：EGO 在优化前设置终端边界，
+固定最后三个控制点，并在时间重分配后重新约束终点，保证授权目标处的零末速度。
+发布前检查整条轨迹及终点的占据情况。独立预览保留默认的自由终点优化。
+若出现 `spline endpoint does not match...`，日志会分别给出 `position_error_m` 和
+`terminal_speed_mps`；应先核对锁定的 EGO 子模块、已编译节点和实际参数，保留执行端门限。
+收到成功规划时管理器会打印 `EGO spline accepted`，实际发送轨迹时状态为 `TRACK_TRAJECTORY`；
+EGO 自身的 `EXEC_TRAJ` 仅表示规划器正在运行其轨迹计时，不能单独确认飞控在执行。
+
+任务到点、超时、hold、land、定位故障或遥控接管取消任务时，管理器会向
+`/ego_preview/planning/cancel` 发送 `std_msgs/msg/Empty`，使 EGO 清除目标并等待新任务，
+避免降落后仍按旧目标持续重规划。该话题可以通过 `ego/cancel_topic` 配置。
+
 | 话题/配置 | 作用 |
 | --- | --- |
 | `/px4_control/goal` | 用户发目标的唯一执行入口，`geometry_msgs/msg/PoseStamped` |
 | `/ego_execution/goal` | 管理器检查后转发给规划器；不作为用户操作入口 |
 | `/ego_preview/planning/bspline` | 规划轨迹；仅在有效目标任务内接受 |
 | `/ego_preview/planning/data_display` | EGO 执行循环心跳 |
+| `/ego_preview/planning/cancel` | 管理器通知 EGO 清除任务，回到等待目标状态 |
 | `/ego_input/camera_pose` | 与适配深度同帧发布的曝光位姿，用于感知时效检查 |
 | `/px4_control/status` | `ego_state`、`ego_reason`、`ego_event`、`ego_goal_odom`、`ego_trajectory_id` 等诊断 |
 | `px4_control/config/px4_control_vins_fusion.yaml` | `ego/*` 接口、任务和执行门限，默认启用 |
@@ -1072,6 +1085,7 @@ Dockerfile 包含包路径、launch 参数解析及 agent 动态库检查，仍�
 - VINS-Fusion 预测发布已加入重传播完成与时间戳前进约束；效果需结合录包及 ULog 评估。
 - EGO 固定目标执行已接入原 PX4 管理器，涵盖轨迹采样、坐标对齐、任务门限、感知/规划超时和显式取消。
 - 本次通过 42 项原控制核心用例及 1021 项新增轨迹/任务检查，Release/CTest 及 ASan/UBSan 均通过（环境中关闭 LeakSanitizer）。完整 ROS 2 节点构建、A7Z 运行与 PX4 飞行闭环尚未验证。
+- 固定终端修复另通过 5948 项 EGO 实际采样器/执行端交叉检查，以及 1409 项终端边界和整段碰撞采样检查；完整 ROS 2 优化器与取消话题仍需在部署环境验证。
 - 当前没有由此流程提供的全局绝对定位，world→odom 默认单位变换。
 - 核心逻辑测试不能代替完整 EKF 融合、串口链路、传感器同步或失效保护的实测。
 
@@ -1094,13 +1108,15 @@ sudo docker compose exec rm-dev /ws/entrypoint.sh bash
 source /opt/ros/humble/setup.bash
 source /ws/install/setup.bash
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-colcon build --executor sequential --packages-select traj_utils ego_depth_inputs px4_control bringup \
+colcon build --executor sequential --packages-select traj_utils bspline_opt ego_planner ego_depth_inputs px4_control bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source /ws/install/setup.bash
 ros2 launch bringup onboard_control.launch.py
 ```
 
 `traj_utils` 来自已锁定的 EGO 子模块；现在是 `px4_control` 的显式构建依赖。
+固定终端修复同时更新 EGO 的 `ros2_version` 分支和本仓库的子模块指针，必须执行子模块更新，
+并重新构建 `bspline_opt`、`ego_planner`，仅构建 `px4_control` 不会修复规划终端行为。
 按第 7.3.1 节等待 HOVER 后发送目标。已有未提交标定/参数修改时先保留并合并，
 尤其检查 Fusion 控制配置中新加的 `ego/*` 参数是否完整。
 
@@ -1189,7 +1205,7 @@ PX4 管理器使用串行 ROS 回调，超时/心跳使用 steady/wall 时钟，
 
 - [PX4 消息适配提交](https://github.com/Spaaaace-yyj/RM_flying_robot_control/commit/785becca2a78afc73315ef0a858c9b59315661ba)
 - [EGO-Planner ROS 2 fork](https://github.com/Spaaaace-yyj/ego-planner-swarm)
-- [当前 EGO 深度/odom 适配基线](https://github.com/Spaaaace-yyj/ego-planner-swarm/commit/e62a52a66e38eebd4e9573bcc5a6fd4a2e515cf8)
+- [当前 EGO 固定终端/深度适配基线](https://github.com/Spaaaace-yyj/ego-planner-swarm/commit/7de57e86e210cbad49adffe0c1a4ec92e74b8e00)
 - [VINS-Fusion 原始算法仓库](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion)
 
 以下 PX4 v1.14 链接用于理解原方案；实际固件接口以第 4 节指定版本及所刷固件为准：

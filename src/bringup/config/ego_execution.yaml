@@ -3,6 +3,8 @@
 /ego_preview/planner:
   ros__parameters:
     grid_map/obstacles_inflation: 0.25
+    # Match the executor's complete fixed-goal endpoint and zero stop velocity.
+    optimization/fixed_terminal: true
     manager/max_vel: 0.5
     manager/max_acc: 0.8
     optimization/max_vel: 0.5
