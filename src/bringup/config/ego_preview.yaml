@@ -26,7 +26,8 @@
     grid_map/depth_filter_mindist: 0.2
     grid_map/depth_filter_margin: 2
     grid_map/k_depth_scaling_factor: 1000.0
-    grid_map/skip_pixel: 2
+    # Shared by preview/execution. A7Z: sample 1/16 pixels instead of 1/4.
+    grid_map/skip_pixel: 4
     grid_map/p_hit: 0.65
     grid_map/p_miss: 0.35
     grid_map/p_min: 0.12
@@ -63,3 +64,4 @@
     prediction/predict_rate: 1.0
     fsm/waypoint_num: 0
     grid_map/use_camera_info: true
+

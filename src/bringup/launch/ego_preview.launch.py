@@ -17,7 +17,8 @@ def generate_launch_description():
         DeclareLaunchArgument("publish_camera_bridge", default_value="true"),
         DeclareLaunchArgument("images_rotated_180", default_value="true"),
         DeclareLaunchArgument("input_config_file", default_value=input_config),
-        DeclareLaunchArgument("planner_config_file", default_value=config),
+        DeclareLaunchArgument("planner_config_file", default_value=config,
+                              description="Planner overrides layered on ego_preview.yaml"),
         DeclareLaunchArgument("goal_topic", default_value="/ego_preview/goal"),
         Node(package="ego_depth_inputs", executable="ego_depth_inputs_node",
              name="ego_depth_inputs", output="screen", parameters=[
@@ -27,7 +28,8 @@ def generate_launch_description():
              "publish_camera_bridge": ParameterValue(
                 LaunchConfiguration("publish_camera_bridge"), value_type=bool)}]),
         Node(package="ego_planner", executable="ego_planner_node", name="planner",
-             namespace="ego_preview", output="screen", parameters=[LaunchConfiguration("planner_config_file"), {"use_sim_time": sim_time}],
+             namespace="ego_preview", output="screen", parameters=[
+                 config, LaunchConfiguration("planner_config_file"), {"use_sim_time": sim_time}],
              remappings=[
                  ("odom_world", "/imu_propagate"), ("grid_map/odom", "/imu_propagate"),
                  ("grid_map/depth", "/ego_input/depth"), ("grid_map/pose", "/ego_input/camera_pose"),
@@ -35,4 +37,5 @@ def generate_launch_description():
                  ("/move_base_simple/goal", LaunchConfiguration("goal_topic")),
              ]),
     ])
+
 

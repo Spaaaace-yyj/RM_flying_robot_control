@@ -191,7 +191,10 @@ namespace px4_control
             //检查视觉后端是否仍在更新
             subscribe<VinsOdom>(backend_topic_, qos, [this](VinsOdom::ConstSharedPtr m)
             {
-                gate_.backend(stampSeconds(m->header.stamp), steadySeconds(), rosSeconds());
+                backend_message_stamp_ = stampSeconds(m->header.stamp);
+                backend_message_rx_ = steadySeconds();
+                if (gate_.backend(backend_message_stamp_, backend_message_rx_, rosSeconds()))
+                { backend_update_rx_ = backend_message_rx_; }
             });
             //Fusion 依然检查两路里程计的时间戳、超时、位置/航向跳变。
             if (!restart_topic_.empty())
@@ -446,6 +449,14 @@ namespace px4_control
         {
             Observation out;
             auto check = gate_.health(now, ros_now);
+            if (!check.first && check.second.find("visual optimization timed out") != std::string::npos)
+            {
+                check.second += "; topic=" + backend_topic_ +
+                    " rx_age_s=" + jsonNumber(now - backend_message_rx_) +
+                    " stamp_age_s=" + jsonNumber(ros_now - backend_message_stamp_) +
+                    " update_age_s=" + jsonNumber(now - backend_update_rx_) +
+                    " limit_s=" + jsonNumber(vio_config_.backend_age);
+            }
             auto reject = [&check](const std::string& reason)
             {
                 check = {false, reason};
@@ -651,6 +662,7 @@ namespace px4_control
                 ego_.cancel("operator reset");
                 depth_stamp_ = planner_stamp_ = 0.;
                 depth_rx_ = planner_rx_ = kNever;
+                backend_message_stamp_ = backend_message_rx_ = backend_update_rx_ = kNever;
                 gate_.clear();
                 alignment_ = Alignment(mounting_);
                 last_vio_.reset();
@@ -759,6 +771,11 @@ namespace px4_control
                     << ",\"target_ned\":" << (flight_.target ? jsonVector(*flight_.target) : "null")
                     << ",\"vio_valid\":" << gate_.health(now, ros_now).first << ",\"reset_counter\":" << gate_.
                     resetCounter()
+                    << ",\"backend_topic\":" << jsonString(backend_topic_)
+                    << ",\"max_backend_age_s\":" << jsonNumber(vio_config_.backend_age)
+                    << ",\"backend_rx_age_s\":" << jsonNumber(now - backend_message_rx_)
+                    << ",\"backend_stamp_age_s\":" << jsonNumber(ros_now - backend_message_stamp_)
+                    << ",\"backend_update_age_s\":" << jsonNumber(now - backend_update_rx_)
                     << ",\"ev_status_required\":" << require_ev_status_
                     << ",\"vehicle_status_rx_age_s\":" << jsonNumber(now - status_rx_)
                     << ",\"vehicle_status_timestamp_age_s\":"
@@ -827,6 +844,7 @@ namespace px4_control
         EstimatorStatusFlags::ConstSharedPtr ev_;
         TimesyncStatus::ConstSharedPtr sync_;
         double status_rx_ = kNever, local_rx_ = kNever, ev_rx_ = kNever, sync_rx_ = kNever, last_diagnostic_ = kNever;
+        double backend_message_stamp_ = kNever, backend_message_rx_ = kNever, backend_update_rx_ = kNever;
         std::deque<Attitude> attitudes_;
         std::optional<VioState> last_vio_;
         std::optional<double> last_ros_, last_ev_sample_;
@@ -862,4 +880,5 @@ int main(int argc, char** argv)
     rclcpp::shutdown();
     return result;
 }
+
 

@@ -372,8 +372,10 @@ ros2 launch bringup localization.launch.py config_file:=/绝对路径/localizati
 
 引用路径支持绝对路径、`~`、环境变量；相对路径在 `config_package` 非空时相对于该包的 share 目录，
 否则相对于引用它的总配置所在目录。VINS 的 `left.yaml`、`right.yaml` 相对于 VINS 配置解析。
-EGO 独立预览默认读取 `config/ego_preview.yaml`，可用 `planner_config_file` 覆盖；
-总入口改用 `config/ego_execution.yaml` 和 `/ego_execution/goal`，目标先经过控制管理器检查。
+EGO 预览与执行共用 `config/ego_preview.yaml` 的建图、相机和坐标参数；`planner_config_file`
+在此基础上叠加覆盖参数。总入口叠加 `config/ego_execution.yaml` 中的速度/加速度与障碍膨胀设置，
+使用 `/ego_execution/goal`，目标先经过控制管理器检查。共享配置默认 `grid_map/skip_pixel: 4`，
+避免切换执行入口后丢失 A7Z 的深度降采样设置。
 
 `startup_delay_s: 8.0` 仅延迟 VINS-Fusion，agent、相机和 IMU 接口立即启动。
 自定义配置省略该项时不延迟。延时采用 wall time，不依赖 `/clock`。
@@ -936,6 +938,24 @@ Fusion 没有独立重启 Bool 通知，仍执行时间戳、跳变、超时和�
 遥控接管或意外上锁后不会自动抢回模式或重新解锁；代码没有空中强制上锁逻辑。
 定位失效后的实际降落能力取决于飞控其余传感器和保护设置。
 
+若出现 `VINS visual optimization timed out`，检查视觉后端 `/odometry`，前向传播 `/imu_propagate`
+仍发布不代表视觉优化仍健康。管理器要求后端时间戳持续前进且接收/源时间年龄均在
+`max_backend_age` 内，Fusion 默认 1.0 s；重复发送旧结果不会刷新该检查。
+
+`/px4_control/status` 和超时日志提供以下诊断，未收到数据时为 `null`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `backend_rx_age_s` | 距离最近收到任意后端消息的时间 |
+| `backend_stamp_age_s` | 当前 ROS 时间减最近后端消息的 header 时间戳 |
+| `backend_update_age_s` | 距离最近接受一条时间戳前进且新鲜的后端结果的时间 |
+| `max_backend_age_s` | 当前实际后端超时门限 |
+
+接收年龄小但源时间年龄大，需区分重复旧结果与处理积压；三项都增大时检查后端/图像链路停更。
+同时运行 `ros2 topic hz /odometry` 和 `ros2 topic delay /odometry`，不能仅凭频率判断新鲜度。
+EGO 在 `WAIT_TARGET` 仍进行深度建图；在 A7Z 上核对实际 `grid_map/skip_pixel` 并比较
+只运行定位与同时建图时的后端延迟。先确认原因，再调整超时门限。
+
 ### 10.3 当前 YAML 参数
 
 以下为仓库两份配置的实际值，不等同于节点未加载 YAML 时的代码默认值：
@@ -1242,4 +1262,5 @@ git clone --branch main https://github.com/Spaaaace-yyj/RM_flying_robot_control.
 EGO 使用 [Spaaaace-yyj/ego-planner-swarm](https://github.com/Spaaaace-yyj/ego-planner-swarm)
 的 ROS 2 fork；上游来源与许可随锁定子模块源码保留。外层 Git 只记录子模块提交指针，
 若修改 EGO，需先在其仓库提交并推送，再在本仓库记录新的子模块指针。
+
 
