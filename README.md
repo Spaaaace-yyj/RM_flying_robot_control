@@ -7,7 +7,7 @@
 **当前 EGO 输出尚未接入 PX4 执行。** `/ego_preview/goal` 只触发规划；
 飞控仍由 `px4_control` 的显式起飞、悬停和降落服务管理。工业相机 + VINS-Mono 流程保留为独立入口。
 
-本文按 2026-11-24 的 `main` 源码与配置整理。串口、标定、固件消息版本和保护参数应与实际设备一致。
+本文按 2026-11-25 的 `main` 源码与配置整理。串口、标定、固件消息版本和保护参数应与实际设备一致。
 各包与第三方目录保留的 README、许可证仍适用于相应组件。
 
 ## 目录
@@ -38,6 +38,7 @@
 | `src/bringup` | 定位、上位机总入口、EGO 预览、Mono 与串口 agent 的 launch 和总配置 |
 | `src/d435_bringup` | D435 数据流、分辨率、曝光、旋转和驱动启动配置 |
 | `src/driver_interface` | PX4 `SensorCombined` → ROS IMU；可选的工业相机灰度转换 |
+| `src/ego_depth_inputs` | 独立 C++ 深度适配包；可靠接收深度、图像时刻的预测位姿插值、固定外参、延迟诊断 |
 | `src/vins_fusion_ros2` | 双目 + IMU VINS-Fusion ROS 2 移植、预测发布与标定配置；普通源码目录 |
 | `src/px4_control` | 外部定位桥接、健康检查、起飞/悬停/降落状态机；C++17 / rclcpp / Eigen3 |
 | `src/ego-planner-swarm` | EGO-Planner ROS 2 fork，使用 Git 子模块锁定版本 |
@@ -53,6 +54,7 @@
 | `bringup onboard_control.launch.py` | `localization` + `px4_control` + `ego_preview` |
 | `bringup localization.launch.py` | 串口 agent、IMU 接口、D435、VINS-Fusion、默认 world→odom、可选四旋翼模型 |
 | `bringup ego_preview.launch.py` | 深度适配器和 EGO 规划器；传感器/VINS/TF 由外部提供 |
+| `ego_depth_inputs ego_depth_inputs.launch.py` | 单独运行 C++ 深度适配器；通过 `config_file` 指定参数文件 |
 | `px4_control px4_control.launch.py` | 仅 PX4 定位桥接与悬停管理器，默认加载 Mono 配置 |
 | `bringup vins_system.launch.py` | 工业相机 + PX4 IMU + VINS-Mono；见第 7.4 节 |
 | `bringup vins_system_sim.launch.py` | 仿真时间下的 VINS-Mono；相机/IMU 需由外部仿真提供 |
@@ -68,7 +70,7 @@ flowchart TD
   V --> B["px4_control 定位桥接与悬停状态机"]
   B --> P["PX4 EKF2 与多旋翼控制器"]
   P --> B
-  D["D435 深度与 CameraInfo"] --> A["按图像时间戳匹配 TF 的深度适配器"]
+  D["D435 深度与 CameraInfo"] --> A["图像时刻位姿插值与固定光学外参"]
   V --> A
   A --> E["EGO 建图与轨迹预览"]
   V --> E
@@ -354,6 +356,7 @@ ros2 launch bringup ego_preview.launch.py
 | `vins_fusion_ros2/config/euroc/euroc_d435_imu_config.yaml` | 双目/IMU 话题、内参文件引用、外参与 td |
 | `px4_control/config/px4_control_vins_fusion.yaml` | 总入口使用的 Fusion 话题、门限和起飞高度 |
 | `bringup/config/ego_preview.yaml` | EGO 建图与轨迹参数，节点为 `/ego_preview/planner` |
+| `ego_depth_inputs/config/ego_depth_inputs.yaml` | C++ 适配器的订阅 QoS、预测位姿缓存、等待/年龄门限和外参模式 |
 | `drone_visualization/config/drone_visualization.yaml` | 模型话题、尺寸、颜色和更新率 |
 
 总入口和定位入口都只接受一个 `config_file`：
@@ -373,11 +376,47 @@ EGO 预览目前固定读取 bringup 安装目录的 `config/ego_preview.yaml`�
 
 ### 7.2 EGO 深度建图与规划预览
 
-深度适配器与当前 RealSense ROS **4.58.4** 的旋转/CameraInfo 约定配套：
-该约定下 180° 旋转图像仍沿用原物理光学系内参。适配器将深度像素旋回物理方向，
-保留对应 CameraInfo，并查询图像采样时间戳处的 TF，发布同一时间戳的三路输入。
-等待 TF 时使用有界队列重试，不能把无 TF 时未输出误判为规划器已经获得深度。
+深度适配已迁移到独立 C++ 包 `ego_depth_inputs`，运行程序为 `ego_depth_inputs_node`，
+节点名仍是 `/ego_depth_inputs`。旧 `bringup/scripts/ego_depth_inputs.py` 已删除，
+升级安装 bringup 时也会清理其旧安装入口，无需重新创建 Docker 容器。
+
+适配器与当前 RealSense ROS **4.58.4** 的旋转/CameraInfo 约定配套：
+该约定下 180° 旋转图像仍沿用原物理光学系内参。节点按字节对旋回 16UC1 深度，
+保留大小端像素值，处理行填充，并保持深度、内参、相机位姿三个输出的原始采样时间戳一致。
 更换驱动、对齐目标或旋转方式时，需重新检查像素、内参和光学轴关系。
+
+默认 `pose_source: imu_propagate`：
+
+1. 深度输入默认 Reliable / Volatile，CameraInfo 默认 Best Effort / Volatile；两者按精确时间戳配对。
+2. 缓存 `/imu_propagate`，在图像采样对应的 IMU 时刻对机体位置做线性插值、姿态做最短弧 SLERP。
+   `camera_imu_time_offset_s` 沿用当前 VINS 标定的 `td`（约 2.195 ms），约定为 `t_imu = t_image + td`；
+   更换标定时同步修改，不要把等待后端的约 0.4 s 延迟填进该参数。三个输出仍使用原图像时间戳。
+3. 启动时从标定 TF 链读取并冻结 `body → 深度光学系` 的固定外参，随后组合该外参与图像时刻机体位姿。
+   因此每帧不再等待视觉后端发布的动态 TF。此模式要求刚性安装、`estimate_extrinsic: 0`；
+   修改标定、安装或重启定位后应重启适配器。
+4. 只发布最新可用的配对帧，丢弃更旧积压；队列有界，默认最多等待 0.25 s、接受 0.5 s 内的图像，
+   位姿插值不跨越大于 0.1 s 的采样缺口。所有时间匹配使用整数纳秒，仅允许至多 1000 ns 的端点舍入容差，
+   不允许用过时机体位姿代替当前观测，也不外推缺失的运动。
+
+独立启动时可在自己的参数文件设置 `pose_source: tf`，恢复原来严格按图像时刻查询 TF 的模式，
+用于其他定位源或对比测试。不会在预测位姿缺失时静默退回后端 TF。
+`bringup ego_preview.launch.py` 新增 `input_config_file` 参数来选择适配器配置；原有
+`use_sim_time`、`images_rotated_180` 和 `publish_camera_bridge` 参数继续有效。
+例如：
+
+```bash
+ros2 launch bringup ego_preview.launch.py input_config_file:=/绝对路径/ego_depth_inputs.yaml
+```
+
+`/ego_input/status`（JSON，1 Hz）报告配对/发布/丢弃计数、输出频率、最新输出年龄、最新位姿年龄和等待原因。
+短暂等待不会刷 WARN；连续超过 `stall_warning_s`（默认 0.5 s）无输出时才报警。
+诊断不替代实际延迟测试：C++ 迁移和预测位姿模式去掉了 Python 开销及逐帧后端 TF 等待，
+但相机时间映射、DDS、定位输入仍可能造成延迟，部署后需测量：
+
+```bash
+ros2 topic echo /ego_input/status
+ros2 topic delay /ego_input/camera_pose
+```
 
 | 话题 | 用途 |
 | --- | --- |
@@ -385,6 +424,7 @@ EGO 预览目前固定读取 bringup 安装目录的 `config/ego_preview.yaml`�
 | `/ego_input/depth` | 适配后的 16UC1 深度 |
 | `/ego_input/camera_info` | 匹配的深度内参 |
 | `/ego_input/camera_pose` | 深度光学系在 `odom` 中的位姿 |
+| `/ego_input/status` | C++ 适配器输出年龄、频率、丢弃计数及等待原因 |
 | `/ego_preview/goal` | `geometry_msgs/msg/PoseStamped` 三维目标，frame 必须为 `odom` |
 | `/ego_preview/planning/bspline` | 规划 B 样条，当前仅预览 |
 | `/ego_preview/grid_map/occupancy_inflate` | 膨胀占据栅格点云 |
@@ -921,6 +961,19 @@ git submodule status
 
 ## 12. 验证范围与当前边界
 
+独立 C++ 深度适配核心通过 253 项原生检查，覆盖纳秒时间匹配、位置/姿态插值、四元数双覆盖、
+拒绝外推/长间隔插值、时钟回退、缓存边界，以及带行填充的 16UC1 旋转和 200 组随机图像。
+此检查不依赖 ROS；完整 Humble 节点构建、真实 DDS/TF 和 A7Z 延迟仍须在部署环境验证。
+可在工作空间启用 `BUILD_TESTING=ON` 后运行 `colcon test --packages-select ego_depth_inputs`，
+或者只测试原生核心：
+
+```bash
+cmake -S src/ego_depth_inputs -B build/depth_inputs_core \
+  -DEGO_DEPTH_INPUTS_CORE_ONLY=ON -DBUILD_TESTING=ON
+cmake --build build/depth_inputs_core -j1
+ctest --test-dir build/depth_inputs_core --output-on-failure
+```
+
 历史提交记录报告过以下检查：
 
 - `px4_control` 低频状态适配的 42 项 Release/CTest 核心用例；较早 C++ 迁移版本还记录过 ASan/UBSan 检查。
@@ -941,6 +994,35 @@ Dockerfile 包含包路径、launch 参数解析及 agent 动态库检查，仍�
 可复现的核心测试命令见第 10.4 节，后续版本以对应提交的实际测试输出和飞行记录为准。
 
 ## 13. 旧版本升级与项目结构
+
+### 13.0 从 Python 深度适配器升级
+
+本地曾应用 Reliable 订阅或 TF 日志补丁时，先仅还原将被删除的旧脚本，再拉取；
+这两项改动已在新 C++ 包实现。保留其他本地标定、规划参数和 Docker 设置。
+
+```bash
+# 宿主机仓库根目录，确认旧 Python 脚本没有其他需要保留的个人修改后执行
+git restore -- src/bringup/scripts/ego_depth_inputs.py
+git pull --ff-only
+```
+
+然后在现有容器 `/ws` 中只构建新包及启动包：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /ws/install/setup.bash
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+colcon build --executor sequential --packages-select ego_depth_inputs bringup \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+source /ws/install/setup.bash
+ros2 pkg executables ego_depth_inputs
+ros2 launch bringup ego_preview.launch.py
+```
+
+依赖为标准 Humble C++ 消息、message_filters、tf2_ros 和 tf2_geometry_msgs；
+此前补装的依赖已覆盖这些包。不要重复启动旧适配器或与总入口同时运行独立预览。
+若是从包含历史数据的 rosbag 回放，保留 `/imu_propagate` 和固定标定 TF 链；
+只有 TF 没有预测里程计的录包应显式选择 `pose_source: tf`。
 
 ### 13.1 从 px4_hover 升级
 
@@ -982,13 +1064,14 @@ ros2 launch bringup onboard_control.launch.py
 | `src/px4_control/src/core.cpp` | 坐标转换、VIO 检查、悬停状态机 |
 | `src/px4_control/src/px4_control_node.cpp` | ROS 订阅、服务、PX4 发布和诊断 |
 | `src/px4_control/test/test_core.cpp` | 不依赖 ROS 的核心用例 |
-| `src/bringup/scripts/ego_depth_inputs.py` | D435 深度旋转、静态桥接 TF 与采样时间匹配 |
+| `src/ego_depth_inputs/src/ego_depth_inputs_node.cpp` | C++ 深度接收、固定光学外参、预测位姿缓存、配对输出与诊断 |
+| `src/ego_depth_inputs/include/ego_depth_inputs/core.hpp` | 纳秒位姿插值、输入校验与 16UC1 旋转的独立核心 |
 | `src/bringup/launch/ego_preview.launch.py` | EGO 节点、参数与话题重映射 |
 | `src/vins_fusion_ros2/vins/src/estimator/estimator.cpp` | VINS 后端与 IMU 预测/重传播 |
 | `src/vins_fusion_ros2/src/vins_estimator.cpp` | Fusion ROS 输入、20 ms 发布定时器和 TF |
 
 PX4 管理器使用串行 ROS 回调，超时/心跳使用 steady/wall 时钟，目标爬升使用 ROS 时钟。
-控制节点运行时为 C++；ROS launch 和深度适配器仍使用 Python，部署时须保留其依赖。
+控制节点和深度适配器运行时均为 C++；ROS launch 和 YAML 路径解析仍使用系统 Python。
 
 ## 14. 参考
 

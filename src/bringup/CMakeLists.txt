@@ -9,7 +9,11 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-install(PROGRAMS scripts/ego_depth_inputs.py DESTINATION lib/${PROJECT_NAME})
+# Remove the old installed entry point when upgrading an existing workspace.
+# No other bringup executable or source file is touched.
+install(CODE [[
+  file(REMOVE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/lib/bringup/ego_depth_inputs.py")
+]])
 
 ament_auto_package(
   INSTALL_TO_SHARE

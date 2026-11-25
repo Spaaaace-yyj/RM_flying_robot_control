@@ -1,0 +1,36 @@
+ego_depth_inputs:
+  ros__parameters:
+    depth_topic: /camera/camera/depth/image_rect_raw
+    camera_info_topic: /camera/camera/depth/camera_info
+    odometry_topic: /imu_propagate
+    local_frame: odom
+    body_frame: body
+    camera_root: camera_link
+    cam0_physical: camera_infra2_optical_frame
+    cam0_calibrated: camera
+    images_rotated_180: true
+    publish_camera_bridge: true
+    # imu_propagate: interpolate the IMU-predicted body pose at the image stamp.
+    # tf: explicitly use the original image-time TF path (backend latency).
+    pose_source: imu_propagate
+    # Required for imu_propagate mode: estimate_extrinsic=0 and rigid mounting.
+    # body -> depth is obtained once from the calibrated TF chain, then frozen.
+    fixed_extrinsics: true
+    # Current euroc_d435_imu_config.yaml td: t_imu = t_image + td.
+    # Keep this in sync when replacing the camera/IMU calibration.
+    # Applied to IMU pose sampling only; output headers retain the image stamp.
+    camera_imu_time_offset_s: 0.0021954063551311784
+    depth_reliability: reliable
+    camera_info_reliability: best_effort
+    input_queue_size: 10
+    sync_queue_size: 30
+    max_pending_frames: 24
+    max_pending_wait_s: 0.25
+    max_input_age_s: 0.5
+    pose_buffer_size: 200
+    pose_buffer_seconds: 2.0
+    max_pose_gap_s: 0.1
+    # Only accommodates VINS double -> nanosecond rounding. Never a frame offset.
+    timestamp_tolerance_ns: 1000
+    processing_rate_hz: 100.0
+    stall_warning_s: 0.5

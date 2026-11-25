@@ -10,11 +10,16 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     config = PathJoinSubstitution([FindPackageShare("bringup"), "config", "ego_preview.yaml"])
+    input_config = PathJoinSubstitution([
+        FindPackageShare("ego_depth_inputs"), "config", "ego_depth_inputs.yaml"])
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("publish_camera_bridge", default_value="true"),
         DeclareLaunchArgument("images_rotated_180", default_value="true"),
-        Node(package="bringup", executable="ego_depth_inputs.py", output="screen", parameters=[
+        DeclareLaunchArgument("input_config_file", default_value=input_config),
+        Node(package="ego_depth_inputs", executable="ego_depth_inputs_node",
+             name="ego_depth_inputs", output="screen", parameters=[
+            LaunchConfiguration("input_config_file"),
             {"use_sim_time": sim_time, "images_rotated_180": ParameterValue(
                 LaunchConfiguration("images_rotated_180"), value_type=bool),
              "publish_camera_bridge": ParameterValue(
