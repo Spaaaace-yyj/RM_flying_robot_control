@@ -1,11 +1,11 @@
 # RoboMaster 2027 自主飞行无人机控制
 
 自主飞行无人机 ROS 2 工作空间，主分支面向 **Ubuntu 22.04 / ROS 2 Humble**。
-当前实机主流程为 **D435 双目 + PX4 IMU → VINS-Fusion → PX4 EKF2 外部视觉融合 → 起飞与定点悬停**，
-同时使用 D435 深度图进行 **EGO-Planner 局部建图和轨迹预览**。
+当前主流程为 **D435 双目 + PX4 IMU → VINS-Fusion → PX4 EKF2 外部视觉融合 → 显式起飞与悬停 → EGO 固定目标规划 → PX4 执行**。
+D435 深度图用于 EGO-Planner 局部建图，轨迹由原有 `px4_control` 管理器统一采样和发送。
 
-**当前 EGO 输出尚未接入 PX4 执行。** `/ego_preview/goal` 只触发规划；
-飞控仍由 `px4_control` 的显式起飞、悬停和降落服务管理。工业相机 + VINS-Mono 流程保留为独立入口。
+**执行入口为 `/px4_control/goal`，只在起飞完成后的 HOVER 接受目标。**
+独立 `ego_preview.launch.py` 仍只做规划预览。工业相机 + VINS-Mono 流程保留为独立入口，默认不启用 EGO 执行。
 
 本文按 2026-11-25 的 `main` 源码与配置整理。串口、标定、固件消息版本和保护参数应与实际设备一致。
 各包与第三方目录保留的 README、许可证仍适用于相应组件。
@@ -40,7 +40,7 @@
 | `src/driver_interface` | PX4 `SensorCombined` → ROS IMU；可选的工业相机灰度转换 |
 | `src/ego_depth_inputs` | 独立 C++ 深度适配包；可靠接收深度、图像时刻的预测位姿插值、固定外参、延迟诊断 |
 | `src/vins_fusion_ros2` | 双目 + IMU VINS-Fusion ROS 2 移植、预测发布与标定配置；普通源码目录 |
-| `src/px4_control` | 外部定位桥接、健康检查、起飞/悬停/降落状态机；C++17 / rclcpp / Eigen3 |
+| `src/px4_control` | 外部定位、健康检查、起飞/悬停/降落和 EGO 轨迹执行；C++17 / rclcpp / Eigen3 |
 | `src/ego-planner-swarm` | EGO-Planner ROS 2 fork，使用 Git 子模块锁定版本 |
 | `src/drone_visualization` | 从里程计位姿生成四旋翼 MarkerArray |
 | `src/px4_msgs` | 直接纳入版本管理的 PX4 消息；已按指定固件提交适配，见第 4 节 |
@@ -72,8 +72,11 @@ flowchart TD
   P --> B
   D["D435 深度与 CameraInfo"] --> A["图像时刻位姿插值与固定光学外参"]
   V --> A
-  A --> E["EGO 建图与轨迹预览"]
+  A --> E["EGO 建图与轨迹规划"]
   V --> E
+  G["HOVER 后显式发送 odom 目标"] --> B
+  B --> E
+  E --> B
 ```
 
 Fusion 的 `/imu_propagate` 是前向传播状态，`/odometry` 是视觉后端输出。
@@ -84,9 +87,10 @@ Fusion ROS 节点当前通过 **20 ms 定时器**发布数据，因此 `/imu_pro
 后端校正后，预测器在同一互斥保护下更新基准并重放缓存 IMU，追赶到实际 IMU 样本后才保存预测；
 ROS 读取端仅返回时间戳前进的预测，避免重复发布旧样本和暴露重传播中间状态。
 
-当前 `px4_control` 不订阅 EGO 的 B 样条。它发送位置和 yaw 目标，速度、加速度、jerk、yaw 角速度字段为 NaN。
-以后接入轨迹跟踪，需要把 EGO 的 `odom` 轨迹通过与定位桥接一致的固定航向/原点变换转换到 PX4 NED，
-并统一轨迹时间与控制权；仅交换 ENU/NED 轴不足以完成对接。
+`px4_control` 在 HOVER 接受目标并转发到 `/ego_execution/goal`，订阅 EGO 的三次 B 样条。
+以 50 Hz 在 ROS 时间下计算位置、速度和加速度，并复用外部定位的冻结航向/原点变换转换到 PX4 NED：
+位置有旋转和平移，速度与加速度只旋转。PX4 使用位置闭环及速度/加速度前馈，yaw 保持起飞/接管时的值。
+悬停时速度/加速度仍为 NaN；jerk 和 yaw 角速度始终为 NaN。只有原管理器发送 Offboard 心跳，不启动另一个轨迹发送器。
 
 ### 2.2 TF 与机体约定
 
@@ -337,7 +341,7 @@ source install/setup.bash
 ros2 launch bringup onboard_control.launch.py
 ```
 
-默认同时启动定位、PX4 管理器和 EGO 预览。启动后不会自动起飞，也不会执行 EGO 轨迹。
+默认同时启动定位、PX4 管理器和 EGO 固定目标规划。启动后等待显式起飞服务；进入 HOVER 后还需显式发送目标，才会执行 EGO 轨迹。
 仅运行定位，或者在定位已运行时单独增加规划预览，可分别使用：
 
 ```bash
@@ -368,7 +372,8 @@ ros2 launch bringup localization.launch.py config_file:=/绝对路径/localizati
 
 引用路径支持绝对路径、`~`、环境变量；相对路径在 `config_package` 非空时相对于该包的 share 目录，
 否则相对于引用它的总配置所在目录。VINS 的 `left.yaml`、`right.yaml` 相对于 VINS 配置解析。
-EGO 预览目前固定读取 bringup 安装目录的 `config/ego_preview.yaml`，没有独立的 `config_file` 参数。
+EGO 独立预览默认读取 `config/ego_preview.yaml`，可用 `planner_config_file` 覆盖；
+总入口改用 `config/ego_execution.yaml` 和 `/ego_execution/goal`，目标先经过控制管理器检查。
 
 `startup_delay_s: 8.0` 仅延迟 VINS-Fusion，agent、相机和 IMU 接口立即启动。
 自定义配置省略该项时不延迟。延时采用 wall time，不依赖 `/clock`。
@@ -426,7 +431,7 @@ ros2 topic delay /ego_input/camera_pose
 | `/ego_input/camera_pose` | 深度光学系在 `odom` 中的位姿 |
 | `/ego_input/status` | C++ 适配器输出年龄、频率、丢弃计数及等待原因 |
 | `/ego_preview/goal` | `geometry_msgs/msg/PoseStamped` 三维目标，frame 必须为 `odom` |
-| `/ego_preview/planning/bspline` | 规划 B 样条，当前仅预览 |
+| `/ego_preview/planning/bspline` | `traj_utils/msg/Bspline`；总入口接入执行，独立预览不驱动飞控 |
 | `/ego_preview/grid_map/occupancy_inflate` | 膨胀占据栅格点云 |
 | `/ego_preview/optimal_list` | 轨迹可视化 |
 
@@ -477,6 +482,63 @@ ros2 service call /px4_control/reset std_srvs/srv/Trigger '{}'
 模式和解锁以 VehicleStatus 确认为准，ACK 接受不代表已完成切换。
 遥控接管后不会自动抢回 Offboard；不要同时运行另一套 Offboard 心跳节点。
 故障、reset 条件和详细门限见第 10 节。
+
+### 7.3.1 起飞后发送固定目标并执行
+
+总入口已连接整条链路，无需额外启动 `traj_server` 或另一套 Offboard 控制器：
+
+```bash
+ros2 launch bringup onboard_control.launch.py
+```
+
+初始化并由 RC 解锁后调用 `/px4_control/takeoff`，等待 `/px4_control/status` 的 `state` 为
+`HOVER` 且 `ready: true`、`armed: true`。然后按现场位置发送目标，例如：
+
+```bash
+ros2 topic pub --once /px4_control/goal geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: odom}, pose: {position: {x: 1.0, y: 0.0, z: 0.8}, orientation: {w: 1.0}}}'
+```
+
+这是 **odom 中的绝对三维位置，单位为米**，不是相对前进 1 m，也不是 PX4 NED；
+先查看 `/imu_propagate` 的当前位置和地图。可省略时间戳（零时间戳在接收时处理），
+非零时间戳须在 1 s 内。目标 orientation 当前不控制 yaw。
+每次只执行一个目标；规划期间保持原悬停点，收到有效轨迹后进入 `TRACK_TRAJECTORY`，
+只有轨迹到期且实际位置/速度达到门限才确认到点，返回 `HOVER`。之后可再次发送目标。
+
+```bash
+# 随时取消目标，捕获当前位置交给 PX4 制动并悬停
+ros2 service call /px4_control/hold std_srvs/srv/Trigger '{}'
+# 结束飞行
+ros2 service call /px4_control/land std_srvs/srv/Trigger '{}'
+# 查看接受/拒绝原因、执行状态和轨迹编号
+ros2 topic echo /px4_control/status
+```
+
+初始限制：单次目标距离不超过 **3 m**，目标及整条轨迹的 odom 高度在 **0.3–2.2 m**；
+执行规划配置为 **0.5 m/s、0.8 m/s²**，管理器对连续曲线的导数控制点另检查
+**0.8 m/s、1.5 m/s²** 上限，并限制轨迹在起点周围 5 m 内。
+这些坐标高度依赖 VINS 初始化原点，**不等同于离地高度**，应按现场标定调整。
+
+5 s 无可接受规划、45 s 任务超时、0.8 s 无新深度曝光位姿或执行中的规划器心跳、
+超过 0.6 m 跟踪误差、无效/不连续轨迹及 EGO 紧停轨迹，都会取消任务；定位/PX4 健康时保持当前位置。
+收到旧轨迹不会自动恢复，需重新发目标。位置捕获交由 PX4 制动，仍存在制动距离。
+定位或飞控状态故障沿用原 LAND/失联处理，遥控切出后不自动抢回。
+当前只接受终点匹配授权目标的完整轨迹段，不支持长航程、途经点队列或摇杆连续导航。
+
+| 话题/配置 | 作用 |
+| --- | --- |
+| `/px4_control/goal` | 用户发目标的唯一执行入口，`geometry_msgs/msg/PoseStamped` |
+| `/ego_execution/goal` | 管理器检查后转发给规划器；不作为用户操作入口 |
+| `/ego_preview/planning/bspline` | 规划轨迹；仅在有效目标任务内接受 |
+| `/ego_preview/planning/data_display` | EGO 执行循环心跳 |
+| `/ego_input/camera_pose` | 与适配深度同帧发布的曝光位姿，用于感知时效检查 |
+| `/px4_control/status` | `ego_state`、`ego_reason`、`ego_event`、`ego_goal_odom`、`ego_trajectory_id` 等诊断 |
+| `px4_control/config/px4_control_vins_fusion.yaml` | `ego/*` 接口、任务和执行门限，默认启用 |
+| `bringup/config/ego_execution.yaml` | 总入口专用规划参数及 0.25 m 障碍膨胀半径 |
+
+地图与曲线仍使用第 7.2 节的可视化话题，显示 frame 选 `odom`。
+独立 `ego_preview.launch.py` 的 `/ego_preview/goal` 仅做预览，不会授权执行。
+首次验证先在仿真/受控环境确认轨迹方向、遥控接管和 hold/land，再做短距离低速实机测试。
 
 ### 7.4 保留的工业相机 / VINS-Mono 入口
 
@@ -862,10 +924,10 @@ Fusion 没有独立重启 Bool 通知，仍执行时间戳、跳变、超时和�
 ### 10.2 状态与故障处理
 
 正常接管经过 `WAIT_READY → READY → PRIMING → REQUEST_OFFBOARD → REQUEST_ARM（按需）→ TAKEOFF/HOVER`，
-另有 `MANUAL`、`FAULT`、`LANDING`。
+固定目标执行增加 `HOVER → TRACK_TRAJECTORY → HOVER`，另有 `MANUAL`、`FAULT`、`LANDING`。
 
 - `takeoff` 捕获当前位置和 yaw，按设定相对高度抬升目标。
-- `hold` 要求已解锁且速度不超过 `max_start_speed`，捕获当前悬停点，不额外爬升。
+- 从外部模式调用 `hold` 接管时要求已解锁且速度不超过 `max_start_speed`；已在 HOVER/轨迹执行时立即取消任务并捕获当前位置。
 - `land` 仅在已解锁、仍处于 Offboard 且无 failsafe 时接受，交由 PX4 AUTO.LAND。
 - `reset` 要求新鲜的未解锁状态，清空对齐和监测锁定并递增定位 reset_counter，不会重启 VINS 或自动复飞。
 
@@ -924,6 +986,7 @@ cmake -S src/px4_control -B build/hover_core   -DPX4_CONTROL_CORE_ONLY=ON -DBUIL
 cmake --build build/hover_core -j2
 ctest --test-dir build/hover_core --output-on-failure
 ./build/hover_core/hover_core_test
+./build/hover_core/ego_execution_test
 ```
 
 ROS 工作空间测试需显式打开构建测试，避免沿用 `BUILD_TESTING=OFF` 的缓存：
@@ -987,7 +1050,8 @@ Dockerfile 包含包路径、launch 参数解析及 agent 动态库检查，仍�
 当前源码边界：
 
 - VINS-Fusion 预测发布已加入重传播完成与时间戳前进约束；效果需结合录包及 ULog 评估。
-- EGO 可使用标定深度、位姿和 odom 目标进行规划预览；尚无 B 样条到 PX4 的执行桥接。
+- EGO 固定目标执行已接入原 PX4 管理器，涵盖轨迹采样、坐标对齐、任务门限、感知/规划超时和显式取消。
+- 本次通过 42 项原控制核心用例及 1021 项新增轨迹/任务检查，Release/CTest 及 ASan/UBSan 均通过（环境中关闭 LeakSanitizer）。完整 ROS 2 节点构建、A7Z 运行与 PX4 飞行闭环尚未验证。
 - 当前没有由此流程提供的全局绝对定位，world→odom 默认单位变换。
 - 核心逻辑测试不能代替完整 EKF 融合、串口链路、传感器同步或失效保护的实测。
 
@@ -995,7 +1059,32 @@ Dockerfile 包含包路径、launch 参数解析及 agent 动态库检查，仍�
 
 ## 13. 旧版本升级与项目结构
 
-### 13.0 从 Python 深度适配器升级
+### 13.0 升级固定目标执行功能
+
+保留现有 Docker 容器。在宿主机仓库拉取代码并初始化子模块，再进入已有容器构建：
+
+```bash
+git pull --ff-only
+git submodule update --init --recursive
+sudo docker compose exec rm-dev /ws/entrypoint.sh bash
+```
+
+```bash
+# 现有容器 /ws；已有 EGO/PX4 环境，不需要删除或重建容器
+source /opt/ros/humble/setup.bash
+source /ws/install/setup.bash
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
+colcon build --executor sequential --packages-select traj_utils ego_depth_inputs px4_control bringup \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+source /ws/install/setup.bash
+ros2 launch bringup onboard_control.launch.py
+```
+
+`traj_utils` 来自已锁定的 EGO 子模块；现在是 `px4_control` 的显式构建依赖。
+按第 7.3.1 节等待 HOVER 后发送目标。已有未提交标定/参数修改时先保留并合并，
+尤其检查 Fusion 控制配置中新加的 `ego/*` 参数是否完整。
+
+### 13.0.1 从 Python 深度适配器升级
 
 本地曾应用 Reliable 订阅或 TF 日志补丁时，先仅还原将被删除的旧脚本，再拉取；
 这两项改动已在新 C++ 包实现。保留其他本地标定、规划参数和 Docker 设置。
@@ -1061,7 +1150,8 @@ ros2 launch bringup onboard_control.launch.py
 | 文件 | 职责 |
 | --- | --- |
 | `src/px4_control/include/px4_control/core.hpp` | 独立核心的状态、配置、观测与动作接口 |
-| `src/px4_control/src/core.cpp` | 坐标转换、VIO 检查、悬停状态机 |
+| `src/px4_control/src/core.cpp` | 坐标转换、VIO 检查、起飞/悬停/轨迹执行状态机 |
+| `src/px4_control/src/ego_trajectory.cpp` | B 样条及导数采样、固定目标任务与超时检查 |
 | `src/px4_control/src/px4_control_node.cpp` | ROS 订阅、服务、PX4 发布和诊断 |
 | `src/px4_control/test/test_core.cpp` | 不依赖 ROS 的核心用例 |
 | `src/ego_depth_inputs/src/ego_depth_inputs_node.cpp` | C++ 深度接收、固定光学外参、预测位姿缓存、配对输出与诊断 |
@@ -1152,3 +1242,4 @@ git clone --branch main https://github.com/Spaaaace-yyj/RM_flying_robot_control.
 EGO 使用 [Spaaaace-yyj/ego-planner-swarm](https://github.com/Spaaaace-yyj/ego-planner-swarm)
 的 ROS 2 fork；上游来源与许可随锁定子模块源码保留。外层 Git 只记录子模块提交指针，
 若修改 EGO，需先在其仓库提交并推送，再在本仓库记录新的子模块指针。
+

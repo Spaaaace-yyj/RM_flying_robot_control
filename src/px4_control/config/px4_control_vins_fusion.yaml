@@ -1,5 +1,21 @@
 px4_control:
   ros__parameters:
+    ego/enabled: true
+    ego/planner_goal_topic: /ego_execution/goal
+    ego/bspline_topic: /ego_preview/planning/bspline
+    ego/depth_pose_topic: /ego_input/camera_pose
+    ego/heartbeat_topic: /ego_preview/planning/data_display
+    ego/max_goal_distance: 3.0
+    ego/min_goal_z: 0.3
+    ego/max_goal_z: 2.2
+    ego/max_velocity: 0.8
+    ego/max_acceleration: 1.5
+    ego/planning_timeout: 5.0
+    ego/mission_timeout: 45.0
+    ego/settle_timeout: 5.0
+    ego/max_tracking_error: 0.6
+    ego/max_depth_pose_age: 0.8
+    ego/max_planner_heartbeat_age: 0.8
     # VINS-Fusion + D435/PX4 IMU / ROS2 Humble / PX4 v1.14.3.
     vins_state_topic: /imu_propagate
     vins_backend_topic: /odometry
@@ -51,3 +67,4 @@ px4_control:
     max_start_speed: 0.35
     max_hover_error: 1.0
     hover_tolerance: 0.15
+

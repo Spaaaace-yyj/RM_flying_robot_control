@@ -114,6 +114,27 @@ namespace px4_control
         return state;
     }
 
+    Vec3 Alignment::localPosition(const Vec3& p) const
+    {
+        if (!initialized_) { throw std::logic_error("alignment is not initialized"); }
+        return world_to_local_ * p + translation_;
+    }
+    Vec3 Alignment::localVector(const Vec3& v) const
+    {
+        if (!initialized_) { throw std::logic_error("alignment is not initialized"); }
+        return world_to_local_ * v;
+    }
+    Vec3 Alignment::worldPosition(const Vec3& p) const
+    {
+        if (!initialized_) { throw std::logic_error("alignment is not initialized"); }
+        return world_to_local_.transpose() * (p - translation_);
+    }
+    Vec3 Alignment::worldVector(const Vec3& v) const
+    {
+        if (!initialized_) { throw std::logic_error("alignment is not initialized"); }
+        return world_to_local_.transpose() * v;
+    }
+
     void VioConfig::validate() const
     {
         positive(max_age, "max_vio_age");
@@ -268,6 +289,7 @@ namespace px4_control
         case State::Manual: return "MANUAL";
         case State::Fault: return "FAULT";
         case State::Landing: return "LANDING";
+        case State::TrackTrajectory: return "TRACK_TRAJECTORY";
         }
         return "UNKNOWN";
     }
@@ -275,7 +297,7 @@ namespace px4_control
     bool active(State state)
     {
         return state == State::Priming || state == State::RequestOffboard || state == State::RequestArm ||
-            state == State::Takeoff || state == State::Hover;
+            state == State::Takeoff || state == State::Hover || state == State::TrackTrajectory;
     }
 
     void FlightConfig::validate() const
@@ -389,6 +411,33 @@ namespace px4_control
         return {true, "LAND requested; never sends in-air disarm"};
     }
 
+    Check Flight::hold(double now, const Observation& o)
+    {
+        if ((state != State::Hover && state != State::TrackTrajectory) ||
+            !o.healthy || !o.status_fresh || !o.armed || o.failsafe || o.nav_state != kOffboard ||
+            !o.position.allFinite() || !std::isfinite(o.heading))
+        {
+            return {false, "hold requires healthy armed OFFBOARD hover/tracking"};
+        }
+        target = o.position;
+        heading_ = o.heading;
+        transition(State::Hover, now, "holding current position; explicit new goal required");
+        return {true, reason};
+    }
+
+    Check Flight::track(const Vec3& reference, const Observation& o)
+    {
+        if ((state != State::Hover && state != State::TrackTrajectory) || !o.healthy ||
+            !o.status_fresh || !o.armed || o.failsafe || o.nav_state != kOffboard || !reference.allFinite())
+        {
+            return {false, "trajectory requires healthy armed OFFBOARD hover/tracking"};
+        }
+        target = reference;
+        state = State::TrackTrajectory;
+        reason = "following EGO position/velocity/acceleration; takeoff yaw held";
+        return {true, reason};
+    }
+
     /**
      * @brief 状态机主循环
      * @param now 当前时间
@@ -413,7 +462,7 @@ namespace px4_control
             if (o.status_fresh && o.failsafe) { transition(State::Manual, now, "PX4 failsafe owns control"); }
             else if (last_ros_ && ros_now < *last_ros_) { fault(now, "ROS clock moved backwards"); }
             else if (!o.healthy) { fault(now, o.reason); }
-            else if ((state == State::Takeoff || state == State::Hover || state == State::RequestArm) && o.nav_state !=
+            else if ((state == State::Takeoff || state == State::Hover || state == State::TrackTrajectory || state == State::RequestArm) && o.nav_state !=
                 kOffboard)
             {
                 transition(State::Manual, now, "PX4/RC left OFFBOARD; no automatic re-entry");
@@ -478,7 +527,7 @@ namespace px4_control
                 transition(State::Hover, now, "target reached");
             }
         }
-        if ((state == State::Takeoff || state == State::Hover) && (o.position - *target).norm() > config_.
+        if ((state == State::Takeoff || state == State::Hover || state == State::TrackTrajectory) && (o.position - *target).norm() > config_.
             max_hover_error)
         {
             fault(now, "tracking error exceeds max_hover_error");
@@ -536,3 +585,4 @@ namespace px4_control
         return "[" + jsonNumber(value.x()) + "," + jsonNumber(value.y()) + "," + jsonNumber(value.z()) + "]";
     }
 } // namespace px4_control
+

@@ -1,4 +1,4 @@
-"""Start D435/PX4 VINS-Fusion localization and the PX4 interface and planning preview."""
+"""Start localization, explicit takeoff and gated fixed-goal EGO/PX4 execution."""
 
 import os
 from pathlib import Path
@@ -97,6 +97,8 @@ def _launch_setup(context):
         "bringup", "ego_preview.launch.py", {
             "use_sim_time": str(use_sim_time).lower(),
             "images_rotated_180": str(abs(angle) == 180).lower(),
+            "goal_topic": "/ego_execution/goal",
+            "planner_config_file": str(Path(get_package_share_directory("bringup")) / "config" / "ego_execution.yaml"),
         },
     )
     return [log_config, localization_launch, control_launch, preview_launch]
@@ -119,3 +121,4 @@ def generate_launch_description():
             launch_setup,
         ]
     )
+

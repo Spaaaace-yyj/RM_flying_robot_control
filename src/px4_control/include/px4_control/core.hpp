@@ -44,6 +44,10 @@ namespace px4_control
         ConvertedState convert(const Vec3& position, const Quat& orientation,
                                const Vec3& velocity, bool body_velocity = false) const;
         bool initialized() const { return initialized_; }
+        Vec3 localPosition(const Vec3& p) const;
+        Vec3 localVector(const Vec3& v) const;
+        Vec3 worldPosition(const Vec3& p) const;
+        Vec3 worldVector(const Vec3& v) const;
 
     private:
         Eigen::Matrix3d imu_from_body_;
@@ -109,7 +113,8 @@ namespace px4_control
         Hover,  //保持固定位置和 yaw
         Manual, //控制已交还 PX4/遥控，或飞行结束
         Fault,  //上位机检测到故障
-        Landing //已请求 PX4 降落
+        Landing, //已请求 PX4 降落
+        TrackTrajectory //执行 EGO 轨迹；保留原状态编号
     };
 
     const char* stateName(State state);
@@ -158,6 +163,8 @@ namespace px4_control
         void fault(double steady_now, const std::string& reason);
         Check reset(double steady_now, const Observation& observation);
         Check land(double steady_now, const Observation& observation);
+        Check hold(double steady_now, const Observation& observation);
+        Check track(const Vec3& reference, const Observation& observation);
         Action tick(double steady_now, double ros_now, const Observation& observation);
 
         State   state = State::WaitReady;
@@ -179,3 +186,4 @@ namespace px4_control
     std::string jsonNumber(double value);
     std::string jsonVector(const Vec3& value);
 } // namespace px4_control
+

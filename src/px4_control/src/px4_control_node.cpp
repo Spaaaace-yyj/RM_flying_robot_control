@@ -1,4 +1,8 @@
 #include "px4_control/core.hpp"
+#include "px4_control/ego_trajectory.hpp"
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <traj_utils/msg/bspline.hpp>
+#include <traj_utils/msg/data_disp.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -132,6 +136,48 @@ namespace px4_control
             gate_ = VioGate(vio_config_);
             alignment_ = Alignment(mounting_);
 
+            ego_enabled_ = parameter<bool>("ego/enabled", false);
+            ego_goal_topic_ = parameter<std::string>("ego/planner_goal_topic", "/ego_execution/goal");
+            ego_spline_topic_ = parameter<std::string>("ego/bspline_topic", "/ego_preview/planning/bspline");
+            ego_pose_topic_ = parameter<std::string>("ego/depth_pose_topic", "/ego_input/camera_pose");
+            ego_heartbeat_topic_ = parameter<std::string>("ego/heartbeat_topic", "/ego_preview/planning/data_display");
+            ego_config_.max_goal_distance = positiveParameter("ego/max_goal_distance", 3.);
+            ego_config_.min_z = parameter<double>("ego/min_goal_z", .3);
+            ego_config_.max_z = parameter<double>("ego/max_goal_z", 2.2);
+            ego_config_.max_velocity = positiveParameter("ego/max_velocity", .8);
+            ego_config_.max_acceleration = positiveParameter("ego/max_acceleration", 1.5);
+            ego_config_.planning_timeout = positiveParameter("ego/planning_timeout", 5.);
+            ego_config_.mission_timeout = positiveParameter("ego/mission_timeout", 45.);
+            ego_config_.settle_timeout = positiveParameter("ego/settle_timeout", 5.);
+            ego_config_.tracking_error = positiveParameter("ego/max_tracking_error", .6);
+            ego_depth_age_ = positiveParameter("ego/max_depth_pose_age", .8);
+            ego_heartbeat_age_ = positiveParameter("ego/max_planner_heartbeat_age", .8);
+            ego_ = EgoExecution(ego_config_);
+            if (ego_enabled_)
+            {
+                if (vio_config_.expected_frame != "odom" || body_velocity_)
+                { throw std::invalid_argument("EGO execution requires odom frame and world VINS velocities"); }
+                ego_goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(ego_goal_topic_, 1);
+                subscribe<geometry_msgs::msg::PoseStamped>("~/goal", rclcpp::QoS(1),
+                    [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr m) { onGoal(*m); });
+                subscribe<traj_utils::msg::Bspline>(ego_spline_topic_, rclcpp::QoS(10),
+                    [this](traj_utils::msg::Bspline::ConstSharedPtr m) { onSpline(*m); });
+                subscribe<geometry_msgs::msg::PoseStamped>(ego_pose_topic_, rclcpp::SensorDataQoS(),
+                    [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr m)
+                    {
+                        const double stamp = stampSeconds(m->header.stamp);
+                        if (m->header.frame_id == vio_config_.expected_frame && stamp > depth_stamp_)
+                        { depth_stamp_ = stamp; depth_rx_ = steadySeconds(); }
+                    });
+                subscribe<traj_utils::msg::DataDisp>(ego_heartbeat_topic_, rclcpp::QoS(10),
+                    [this](traj_utils::msg::DataDisp::ConstSharedPtr m)
+                    {
+                        const double stamp = stampSeconds(m->header.stamp);
+                        if (stamp > planner_stamp_) { planner_stamp_ = stamp; planner_rx_ = steadySeconds(); }
+                    });
+                RCLCPP_INFO(get_logger(), "EGO execution enabled: send odom goals to ~/goal after HOVER");
+            }
+
             visual_pub_ = create_publisher<VehicleOdometry>(ns + "/in/vehicle_visual_odometry", 10);
             mode_topic_ = ns + "/in/offboard_control_mode";
             mode_pub_ = create_publisher<OffboardControlMode>(mode_topic_, 10); //心跳数据
@@ -221,11 +267,23 @@ namespace px4_control
                                              }
                                          });
             service("~/takeoff", [this] { return begin(true); });
-            service("~/hold", [this] { return begin(false); });
+            service("~/hold", [this]
+            {
+                const double t = steadySeconds();
+                if (flight_.state == State::Hover || flight_.state == State::TrackTrajectory)
+                {
+                    const auto result = flight_.hold(t, observation(t, rosSeconds()));
+                    if (result.first) { ego_.cancel("operator hold; explicit new goal required"); }
+                    return result;
+                }
+                return begin(false);
+            });
             service("~/land", [this]
             {
                 const double t = steadySeconds();
-                return flight_.land(t, observation(t, rosSeconds()));
+                const auto result = flight_.land(t, observation(t, rosSeconds()));
+                if (result.first) { ego_.cancel("operator requested LAND"); }
+                return result;
             });
             service("~/reset", [this] { return reset(); });
             // Wall clock keeps watchdog evaluation running while /clock is paused.
@@ -469,12 +527,130 @@ namespace px4_control
             return flight_.begin(now, ros_now, observation(now, ros_now), takeoff);
         }
 
+        bool inputFresh(double stamp, double received, double steady, double ros, double max_age) const
+        {
+            return std::isfinite(stamp) && stamp > 0. && steady - received <= max_age &&
+                ros - stamp >= -.05 && ros - stamp <= max_age;
+        }
+
+        bool executionReady(const Observation& o) const
+        {
+            return o.healthy && o.status_fresh && o.armed && !o.failsafe && o.nav_state == kOffboard &&
+                (flight_.state == State::Hover || flight_.state == State::TrackTrajectory);
+        }
+
+        void onGoal(const geometry_msgs::msg::PoseStamped& m)
+        {
+            const double steady = steadySeconds(), ros = rosSeconds();
+            const auto o = observation(steady, ros);
+            Check result{false, "goal requires completed takeoff/HOVER and healthy armed OFFBOARD"};
+            const double stamp = stampSeconds(m.header.stamp);
+            if (executionReady(o) && flight_.state == State::Hover && !ego_.busy())
+            {
+                if (m.header.frame_id != vio_config_.expected_frame ||
+                    (stamp != 0. && (ros - stamp < -.05 || ros - stamp > 1.)))
+                { result.second = "goal requires odom frame and fresh or zero timestamp"; }
+                else if (!inputFresh(depth_stamp_, depth_rx_, steady, ros, ego_depth_age_))
+                { result.second = "no fresh depth-exposure camera pose"; }
+                else if (count_publishers(ego_spline_topic_) != 1 || count_subscribers(ego_goal_topic_) != 1)
+                { result.second = "require exactly one EGO planner on configured goal/bspline topics"; }
+                else if (!flight_.target || (o.position - *flight_.target).norm() > .2)
+                { result.second = "wait until hover position has settled"; }
+                else
+                {
+                    const auto& p = m.pose.position;
+                    result = ego_.begin(Vec3(p.x, p.y, p.z), alignment_.worldPosition(o.position),
+                                        alignment_.worldVector(o.velocity), steady, ros);
+                    if (result.first)
+                    {
+                        auto goal = m;
+                        goal.header.stamp = this->now();
+                        // Fixed-yaw execution ignores goal orientation; keep planner input normalized.
+                        goal.pose.orientation.x = goal.pose.orientation.y = goal.pose.orientation.z = 0.;
+                        goal.pose.orientation.w = 1.;
+                        ego_goal_pub_->publish(goal);
+                    }
+                }
+            }
+            ego_event_ = result.second;
+            if (result.first) { RCLCPP_INFO(get_logger(), "EGO goal: %s", result.second.c_str()); }
+            else { RCLCPP_WARN(get_logger(), "EGO goal rejected: %s", result.second.c_str()); }
+        }
+
+        void onSpline(const traj_utils::msg::Bspline& m)
+        {
+            if (!ego_.busy()) { return; } // No automatic execution of preview or old trajectories.
+            const double steady = steadySeconds(), ros = rosSeconds();
+            const auto o = observation(steady, ros);
+            if (!executionReady(o)) { return; }
+            try
+            {
+                if (count_publishers(ego_spline_topic_) != 1 || m.drone_id != 0)
+                { throw std::invalid_argument("ambiguous planner or wrong drone_id"); }
+                std::vector<Vec3> points;
+                points.reserve(m.pos_pts.size());
+                for (const auto& p : m.pos_pts) { points.emplace_back(p.x, p.y, p.z); }
+                const EgoSpline spline(m.order, std::move(points), m.knots,
+                                       ego_config_.max_velocity, ego_config_.max_acceleration);
+                const auto result = ego_.receive(spline, m.traj_id, stampSeconds(m.start_time),
+                    alignment_.worldPosition(o.position), alignment_.worldVector(o.velocity), ros);
+                ego_event_ = result.second;
+                if (result.first)
+                {
+                    planner_rx_ = steady;
+                    planner_stamp_ = ros;
+                }
+                else { RCLCPP_WARN(get_logger(), "EGO spline: %s", result.second.c_str()); }
+            }
+            catch (const std::exception& error)
+            {
+                ego_.cancel(std::string("invalid EGO spline: ") + error.what());
+                ego_event_ = ego_.reason();
+                RCLCPP_ERROR(get_logger(), "%s", ego_event_.c_str());
+            }
+        }
+
+        std::optional<Reference> egoReference(double steady, double ros, const Observation& o)
+        {
+            if (!ego_enabled_) { return std::nullopt; }
+            std::optional<Reference> reference;
+            if (ego_.busy())
+            {
+                if (!executionReady(o)) { ego_.cancel("flight health/mode changed; goal cancelled"); }
+                else if (count_publishers(ego_spline_topic_) != 1)
+                { ego_.cancel("EGO planner disconnected/ambiguous; holding"); }
+                else
+                {
+                    reference = ego_.tick(steady, ros, alignment_.worldPosition(o.position),
+                        alignment_.worldVector(o.velocity),
+                        inputFresh(depth_stamp_, depth_rx_, steady, ros, ego_depth_age_),
+                        inputFresh(planner_stamp_, planner_rx_, steady, ros, ego_heartbeat_age_));
+                }
+            }
+            if (reference)
+            {
+                reference->position = alignment_.localPosition(reference->position);
+                reference->velocity = alignment_.localVector(reference->velocity);
+                reference->acceleration = alignment_.localVector(reference->acceleration);
+                const auto result = flight_.track(reference->position, o);
+                if (!result.first) { ego_.cancel(result.second); reference.reset(); }
+            }
+            // A planner failure holds only when PX4/localization are still healthy.
+            // Otherwise the existing Flight watchdog keeps ownership of LAND/RC takeover.
+            if (!ego_.busy() && flight_.state == State::TrackTrajectory && executionReady(o))
+            { flight_.hold(steady, o); }
+            return reference;
+        }
+
         Check reset()
         {
             const double now = steadySeconds();
             const auto result = flight_.reset(now, observation(now, rosSeconds()));
             if (result.first)
             {
+                ego_.cancel("operator reset");
+                depth_stamp_ = planner_stamp_ = 0.;
+                depth_rx_ = planner_rx_ = kNever;
                 gate_.clear();
                 alignment_ = Alignment(mounting_);
                 last_vio_.reset();
@@ -542,6 +718,7 @@ namespace px4_control
                 last_ev_sample_ = last_vio_->sample;
             }
             const auto o = observation(now, ros_now);
+            const auto reference = egoReference(now, ros_now, o);
             const auto action = flight_.tick(now, ros_now, o);
             if (action.heartbeat)
             {
@@ -557,6 +734,11 @@ namespace px4_control
                 sp.acceleration.fill(nan);
                 sp.jerk.fill(nan);
                 sp.yawspeed = nan;
+                if (reference && flight_.state == State::TrackTrajectory)
+                {
+                    sp.velocity = floats(reference->velocity);
+                    sp.acceleration = floats(reference->acceleration);
+                }
                 setpoint_pub_->publish(sp);
                 mode_pub_->publish(mode);
             }
@@ -586,6 +768,14 @@ namespace px4_control
                     << jsonNumber(ev_ ? ros_now - static_cast<double>(ev_->timestamp) * 1e-6 : kNever)
                     << ",\"timesync_rx_age_s\":" << jsonNumber(now - sync_rx_)
                     << ",\"timesync_round_trip_ms\":" << jsonNumber(sync_ ? sync_->round_trip_time * 1e-3 : kNever)
+                    << ",\"ego_enabled\":" << ego_enabled_
+                    << ",\"ego_state\":" << jsonString(ego_.stateName())
+                    << ",\"ego_reason\":" << jsonString(ego_.reason())
+                    << ",\"ego_event\":" << jsonString(ego_event_)
+                    << ",\"ego_goal_odom\":" << (ego_.goal() ? jsonVector(*ego_.goal()) : "null")
+                    << ",\"ego_trajectory_id\":" << ego_.trajectoryId()
+                    << ",\"ego_depth_pose_age_s\":" << jsonNumber(ros_now - depth_stamp_)
+                    << ",\"ego_planner_rx_age_s\":" << jsonNumber(now - planner_rx_)
                     << "}";
                 std_msgs::msg::String m;
                 m.data = data.str();
@@ -617,6 +807,13 @@ namespace px4_control
         Alignment alignment_;
         //飞行状态管理
         Flight flight_;
+        EgoConfig ego_config_;
+        EgoExecution ego_;
+        bool ego_enabled_ = false;
+        std::string ego_goal_topic_, ego_spline_topic_, ego_pose_topic_, ego_heartbeat_topic_, ego_event_;
+        double ego_depth_age_ = .8, ego_heartbeat_age_ = .8;
+        double depth_stamp_ = 0., planner_stamp_ = 0., depth_rx_ = kNever, planner_rx_ = kNever;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ego_goal_pub_;
 
         std::array<double, 4> mounting_{0., 0., 0., 1.};
         std::string state_topic_, backend_topic_, restart_topic_, mode_topic_, clock_guard_, last_print_;
@@ -665,3 +862,4 @@ int main(int argc, char** argv)
     rclcpp::shutdown();
     return result;
 }
+
