@@ -19,7 +19,7 @@ ego_depth_inputs:
     # Current euroc_d435_imu_config.yaml td: t_imu = t_image + td.
     # Keep this in sync when replacing the camera/IMU calibration.
     # Applied to IMU pose sampling only; output headers retain the image stamp.
-    camera_imu_time_offset_s: 0.0021954063551311784
+    camera_imu_time_offset_s: 0.003373563583910677
     depth_reliability: reliable
     camera_info_reliability: best_effort
     input_queue_size: 10
