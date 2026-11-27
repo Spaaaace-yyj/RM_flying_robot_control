@@ -6,6 +6,8 @@ px4_control:
     ego/depth_pose_topic: /ego_input/camera_pose
     ego/heartbeat_topic: /ego_preview/planning/data_display
     ego/max_goal_distance: 3.0
+    # Must match fsm/nearby_goal_radius in bringup/config/ego_execution.yaml; 0 disables fallback.
+    ego/nearby_goal_radius: 0.5
     ego/min_goal_z: 0.3
     ego/max_goal_z: 2.2
     ego/max_velocity: 0.8

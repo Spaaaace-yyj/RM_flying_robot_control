@@ -509,6 +509,7 @@ ros2 topic pub --once /px4_control/goal geometry_msgs/msg/PoseStamped \
 `goal_odom`、`vehicle_odom`、`forward_odom` 和 `displacement_odom`，可直接核对方向与距离。
 每次只执行一个目标；规划期间保持原悬停点，收到有效轨迹后进入 `TRACK_TRAJECTORY`，
 只有轨迹到期且实际位置/速度达到门限才确认到点，返回 `HOVER`。之后可再次发送目标。
+若当前位置已在目标 0.15 m 内，接受为原地悬停，不再把重复目标当成距离过小的错误。
 
 ```bash
 # 随时取消目标，捕获当前位置交给 PX4 制动并悬停
@@ -528,7 +529,25 @@ ros2 topic echo /px4_control/status
 超过 0.6 m 跟踪误差、无效/不连续轨迹及 EGO 紧停轨迹，都会取消任务；定位/PX4 健康时保持当前位置。
 收到旧轨迹不会自动恢复，需重新发目标。位置捕获交由 PX4 制动，仍存在制动距离。
 定位或飞控状态故障沿用原 LAND/失联处理，遥控切出后不自动抢回。
-当前只接受终点匹配授权目标的完整轨迹段，不支持长航程、途经点队列或摇杆连续导航。
+当前只接受终点位于授权停靠区域内的完整轨迹段，不支持长航程、途经点队列或摇杆连续导航。
+
+默认采用附近停靠：原始目标空闲时保持原坐标；原始目标占据、处于膨胀区或越界时，
+在其**同一 odom 高度、水平半径 0.5 m** 内搜索已观测、未占据且未膨胀的栅格位置。
+优先选择距原目标最近的位置，等距时优先机体一侧。找到候选点后仍须成功规划并通过整段
+碰撞、速度、加速度、轨迹连续性和高度检查；没有候选点或可执行轨迹时保持悬停。
+不会因目标被挡住而穿过障碍，也不会自动改变目标高度。
+
+规划器打印 `Using nearby free stop`，执行端打印请求位置、轨迹终点和 `adjustment_m`。
+第一条有效轨迹确定实际停靠点，后续重规划须维持该停靠点及原请求区域的约束；
+到点按实际停靠点判断，完成时显示 `nearby goal reached`。
+运行中的停靠点随后被占据时取消并悬停，需要重新发目标。
+`/px4_control/status` 的 `ego_requested_goal_odom` 为原请求，`ego_goal_odom` 在接收首条轨迹后
+为实际停靠点，`ego_nearby_goal_radius_m` 为允许的调整半径。
+同时调整 Fusion 控制配置的 `ego/nearby_goal_radius` 和执行规划配置的
+`fsm/nearby_goal_radius`；两者默认均为 0.5 m，设为 0 恢复严格终点，允许范围为 0–2 m。
+这些参数启动时读取，修改后重新启动节点；独立预览默认不启用附近停靠。
+
+管理器拒绝时会分别给出距离、odom 高度或起始速度及对应门限，不再合并为一条无法区分的提示。
 
 执行配置启用 `optimization/fixed_terminal: true`：EGO 在优化前设置终端边界，
 固定最后三个控制点，并在时间重分配后重新约束终点，保证授权目标处的零末速度。
@@ -538,10 +557,15 @@ ros2 topic echo /px4_control/status
 收到成功规划时管理器会打印 `EGO spline accepted`，实际发送轨迹时状态为 `TRACK_TRAJECTORY`；
 EGO 自身的 `EXEC_TRAJ` 仅表示规划器正在运行其轨迹计时，不能单独确认飞控在执行。
 
-固定目标在规划前检查占据情况：被拒绝时回到等待目标，并通过
+固定目标在规划前检查占据情况，附近搜索也失败时回到等待目标，并通过
 `/ego_preview/planning/rejected_goal` 原样回传请求的时间戳、坐标系和位置。
 管理器只结束与当前请求完全匹配的任务，迟到的旧回复不会取消新目标；不再反复优化同一个
 已知无效终点。此话题可通过 `ego/rejected_goal_topic` 配置。
+
+上游 EGO 同样可能规划失败：优化失败或精修后碰撞会返回失败，FSM 会重试，
+执行中遇到深度超时或迫近碰撞则可能紧停。上游的默认滚动规划/自由终点与这里的完整
+停靠任务不同；`Fixed goal rejected` 是本项目增加的提前终点检查。
+附近停靠放宽目标位置要求，不取消路径可行性和飞控健康检查。
 
 目标拒绝日志中的 `reason` 分别为 `outside_map`（越界）、`occupied`（原始栅格占据）、
 `inflation_only`（原始格空闲但膨胀后占据），并列出目标/机体坐标、原始/膨胀值和地图边界。
@@ -564,7 +588,7 @@ EGO 自身的 `EXEC_TRAJ` 仅表示规划器正在运行其轨迹计时，不能
 | `/ego_preview/planning/cancel` | 管理器通知 EGO 清除任务，回到等待目标状态 |
 | `/ego_preview/planning/rejected_goal` | EGO 回传被拒绝的当前目标；管理器按请求身份关联 |
 | `/ego_input/camera_pose` | 与适配深度同帧发布的曝光位姿，用于感知时效检查 |
-| `/px4_control/status` | `ego_state`、`ego_reason`、`ego_event`、`ego_goal_odom`、`ego_trajectory_id` 等诊断 |
+| `/px4_control/status` | `ego_state`、`ego_reason`、原请求 `ego_requested_goal_odom`、实际停靠点 `ego_goal_odom`、轨迹编号等诊断 |
 | `px4_control/config/px4_control_vins_fusion.yaml` | `ego/*` 接口、任务和执行门限，默认启用 |
 | `bringup/config/ego_execution.yaml` | 总入口专用规划参数及 0.25 m 障碍膨胀半径 |
 
@@ -1101,8 +1125,8 @@ Dockerfile 包含包路径、launch 参数解析及 agent 动态库检查，仍�
 
 - VINS-Fusion 预测发布已加入重传播完成与时间戳前进约束；效果需结合录包及 ULog 评估。
 - EGO 固定目标执行已接入原 PX4 管理器，涵盖轨迹采样、坐标对齐、任务门限、感知/规划超时和显式取消。
-- 本次通过 42 项原控制核心用例及 1021 项新增轨迹/任务检查，Release/CTest 及 ASan/UBSan 均通过（环境中关闭 LeakSanitizer）。完整 ROS 2 节点构建、A7Z 运行与 PX4 飞行闭环尚未验证。
-- 固定终端修复另通过 5948 项 EGO 实际采样器/执行端交叉检查，以及 1409 项终端边界和整段碰撞采样检查；完整 ROS 2 优化器与取消话题仍需在部署环境验证。
+- 附近停靠变更通过 Release/CTest：42 项控制核心用例、1061 项轨迹/任务检查、5958 项实际 EGO 采样器/执行端交叉检查，以及 7846 项附近点搜索、终端边界和整段碰撞采样检查。
+- 上述为不依赖 ROS 的核心测试；本次变更的完整 ROS 2 节点构建、消息传递和 A7Z/PX4 飞行闭环仍需在部署环境验证。
 - 当前没有由此流程提供的全局绝对定位，world→odom 默认单位变换。
 - 核心逻辑测试不能代替完整 EKF 融合、串口链路、传感器同步或失效保护的实测。
 
@@ -1222,7 +1246,8 @@ PX4 管理器使用串行 ROS 回调，超时/心跳使用 steady/wall 时钟，
 
 - [PX4 消息适配提交](https://github.com/Spaaaace-yyj/RM_flying_robot_control/commit/785becca2a78afc73315ef0a858c9b59315661ba)
 - [EGO-Planner ROS 2 fork](https://github.com/Spaaaace-yyj/ego-planner-swarm)
-- [当前 EGO 固定终端/深度适配基线](https://github.com/Spaaaace-yyj/ego-planner-swarm/commit/d65b4663991a810a3b596d1416a1f2e4a7fa558f)
+- [EGO 原版的优化/精修失败处理](https://github.com/ZJU-FAST-Lab/ego-planner/blob/master/src/planner/plan_manage/src/planner_manager.cpp)
+- [当前 EGO 固定终端/深度适配基线](https://github.com/Spaaaace-yyj/ego-planner-swarm/commit/077cb4bfdb8bf9cc0a3de6d702148a16a6b116d6)
 - [VINS-Fusion 原始算法仓库](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion)
 
 以下 PX4 v1.14 链接用于理解原方案；实际固件接口以第 4 节指定版本及所刷固件为准：

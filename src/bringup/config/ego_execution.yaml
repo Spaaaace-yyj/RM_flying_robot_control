@@ -5,6 +5,9 @@
     grid_map/obstacles_inflation: 0.25
     # Match the executor's complete fixed-goal endpoint and zero stop velocity.
     optimization/fixed_terminal: true
+    # Same-height free stop within this radius if the requested endpoint is blocked.
+    # Keep equal to px4_control's ego/nearby_goal_radius. 0 disables fallback.
+    fsm/nearby_goal_radius: 0.5
     manager/max_vel: 0.5
     manager/max_acc: 0.8
     optimization/max_vel: 0.5

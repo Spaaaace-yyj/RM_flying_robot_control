@@ -40,6 +40,7 @@ namespace px4_control
         double max_start_age = .5, future_tolerance = .05;
         double continuity_position = .35, continuity_velocity = .5, tracking_error = .6;
         double goal_tolerance = .15, arrival_speed = .15, start_speed = .35;
+        double nearby_goal_radius = .5; // Horizontal adjustment; 0 requires the exact requested goal.
         void validate() const;
     };
 
@@ -60,10 +61,12 @@ namespace px4_control
         const char* stateName() const { return tracking() ? "TRACKING" : busy() ? "WAIT_PLAN" : "IDLE"; }
         const std::string& reason() const { return reason_; }
         const std::optional<Vec3>& goal() const { return goal_; }
+        const std::optional<Vec3>& requestedGoal() const { return requested_goal_; }
         int64_t trajectoryId() const { return id_; }
     private:
         EgoConfig config_;
-        std::optional<Vec3> goal_;
+        std::optional<Vec3> goal_, requested_goal_;
+        bool nearby_stop_ = false;
         std::optional<EgoSpline> spline_;
         double requested_ros_ = 0., requested_steady_ = 0., start_ = 0., last_ros_ = 0.;
         double settled_since_ = kNever;

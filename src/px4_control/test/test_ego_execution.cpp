@@ -94,6 +94,48 @@ int main()
         throws([] { spline().sample(NAN); });
         throws([] { EgoConfig c; c.min_z = c.max_z; c.validate(); });
         throws([] { EgoConfig c; c.planning_timeout = NAN; c.validate(); });
+        throws([] { EgoConfig c; c.nearby_goal_radius = NAN; c.validate(); });
+        throws([] { EgoConfig c; c.nearby_goal_radius = -.1; c.validate(); });
+        throws([] { EgoConfig c; c.nearby_goal_radius = 2.1; c.validate(); });
+
+        // Repeating an already reached goal succeeds as a hold without authorizing a spline.
+        EgoExecution close;
+        check(close.begin(origin,origin,zero,0.,100.).first && !close.busy());
+        check(close.begin(origin+Vec3(.1,0,0),origin,zero,0.,100.).first && !close.busy());
+        check(!close.receive(spline(),1,100.,origin,zero,100.).first);
+        check(!close.begin(origin,origin,Vec3(.36,0,0),0.,100.).first);
+        check(close.begin(origin+Vec3(.16,0,0),origin,zero,0.,100.).first && close.busy());
+        close.cancel("test");
+        check(close.begin(Vec3(4,0,1),origin,zero,0.,100.).second.find("distance_m=")!=std::string::npos);
+        check(close.begin(Vec3(1,0,0),origin,zero,0.,100.).second.find("z_m=")!=std::string::npos);
+        check(close.begin(goal,origin,Vec3(.36,0,0),0.,100.).second.find("speed_mps=")!=std::string::npos);
+
+        // First valid complete spline chooses a nearby stop. Arrival uses this point,
+        // while rejection correlation keeps the original request identity.
+        const Vec3 nearby(.75,0,1);
+        auto nearby_points=points(); for(int i=3;i<6;++i) nearby_points[i]=nearby;
+        EgoSpline near_spline(3,nearby_points,knots(),2.,2.);
+        EgoExecution adjusted;
+        check(adjusted.begin(goal,origin,zero,0.,100.).first);
+        check(adjusted.receive(near_spline,1,100.1,origin,zero,100.1).first);
+        near(*adjusted.goal(),nearby); near(*adjusted.requestedGoal(),goal);
+        check(goalRejectionMatches(100000001,*adjusted.requestedGoal(),"odom",100000001,goal,"odom"));
+        auto frozen=adjusted;
+        auto drift_points=points(); for(int i=3;i<6;++i) drift_points[i]=Vec3(.5,0,1);
+        check(!frozen.receive(EgoSpline(3,drift_points,knots(),2.,2.),2,100.2,origin,zero,100.2).first);
+        check(!frozen.busy()); // A later endpoint cannot wander within the original region.
+        check(!adjusted.tick(3.2,103.2,nearby,zero,true,false));
+        check(!adjusted.busy() && adjusted.reason().find("nearby goal reached")!=std::string::npos);
+        for(const Vec3& delta : {Vec3(.51,0,0),Vec3(0,0,.16),Vec3(.4,.4,0)})
+        {
+            auto p=points(); for(int i=3;i<6;++i) p[i]=goal+delta;
+            EgoExecution outside; check(outside.begin(goal,origin,zero,0.,100.).first);
+            check(!outside.receive(EgoSpline(3,p,knots(),2.,2.),1,100.1,origin,zero,100.1).first);
+            check(outside.busy() && !outside.tracking());
+        }
+        EgoConfig exact_config; exact_config.nearby_goal_radius=0.;
+        EgoExecution exact(exact_config); check(exact.begin(goal,origin,zero,0.,100.).first);
+        check(!exact.receive(near_spline,1,100.1,origin,zero,100.1).first);
 
         EgoExecution e;
         check(!e.receive(spline(), 1, 100., origin, zero, 100.).first);

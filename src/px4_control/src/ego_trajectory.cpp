@@ -100,6 +100,8 @@ namespace px4_control
         { if (!std::isfinite(value) || value <= 0.) { throw std::invalid_argument("invalid EGO execution limit"); } }
         if (!std::isfinite(min_z) || !std::isfinite(max_z) || min_z >= max_z)
         { throw std::invalid_argument("invalid EGO odom altitude range"); }
+        if (!std::isfinite(nearby_goal_radius) || nearby_goal_radius < 0. || nearby_goal_radius > 2.)
+        { throw std::invalid_argument("EGO nearby goal radius must be in [0,2] metres"); }
     }
 
     EgoExecution::EgoExecution(EgoConfig config) : config_(config) { config_.validate(); }
@@ -109,10 +111,24 @@ namespace px4_control
         if (busy()) { return {false, "one goal at a time; hold to cancel first"}; }
         if (!goal.allFinite() || !p.allFinite() || !v.allFinite() || !std::isfinite(steady) || !std::isfinite(ros))
         { return {false, "non-finite goal/state/time"}; }
-        if ((goal - p).norm() > config_.max_goal_distance || (goal - p).norm() < config_.goal_tolerance ||
-            goal.z() < config_.min_z || goal.z() > config_.max_z || v.norm() > config_.start_speed)
-        { return {false, "goal distance/odom altitude or initial speed outside limits"}; }
+        const double distance = (goal - p).norm();
+        if (distance > config_.max_goal_distance)
+        { return {false, "goal too far: distance_m=" + jsonNumber(distance) +
+                        " limit_m=" + jsonNumber(config_.max_goal_distance)}; }
+        if (goal.z() < config_.min_z || goal.z() > config_.max_z)
+        { return {false, "goal odom altitude outside limits: z_m=" + jsonNumber(goal.z()) +
+                        " min_m=" + jsonNumber(config_.min_z) + " max_m=" + jsonNumber(config_.max_z)}; }
+        if (v.norm() > config_.start_speed)
+        { return {false, "initial speed too high: speed_mps=" + jsonNumber(v.norm()) +
+                        " limit_mps=" + jsonNumber(config_.start_speed)}; }
+        if (distance <= config_.goal_tolerance)
+        {
+            cancel("already within goal tolerance; holding current position");
+            return {true, reason_};
+        }
         goal_ = goal;
+        requested_goal_ = goal;
+        nearby_stop_ = false;
         origin_ = p;
         spline_.reset();
         id_ = -1;
@@ -142,13 +158,21 @@ namespace px4_control
             return {false, reason_};
         }
         const auto end = spline.sample(spline.duration());
-        // Fixed-goal mode accepts complete segments only, never a local horizon endpoint for another goal.
-        if ((end.position - *goal_).norm() > config_.goal_tolerance || end.velocity.norm() > config_.arrival_speed)
+        // The first complete segment selects a stop within the authorized region. Freeze it
+        // for later replans; never let a sequence of nearby endpoints drift away from the request.
+        const Vec3 adjustment = end.position - *requested_goal_;
+        const bool in_region = adjustment.norm() <= config_.goal_tolerance ||
+            (config_.nearby_goal_radius > 0. && adjustment.head<2>().norm() <= config_.nearby_goal_radius + 1e-9 &&
+             std::abs(adjustment.z()) <= config_.goal_tolerance);
+        if (!in_region || (tracking() && (end.position - *goal_).norm() > config_.goal_tolerance) ||
+            end.velocity.norm() > config_.arrival_speed)
         {
             const std::string detail = "spline endpoint does not match authorized fixed goal/stop speed: goal=" +
                 jsonVector(*goal_) + " endpoint=" + jsonVector(end.position) +
                 " position_error_m=" + jsonNumber((end.position - *goal_).norm()) +
                 " terminal_speed_mps=" + jsonNumber(end.velocity.norm()) +
+                " requested_goal=" + jsonVector(*requested_goal_) +
+                " nearby_radius_m=" + jsonNumber(config_.nearby_goal_radius) +
                 " position_tolerance_m=" + jsonNumber(config_.goal_tolerance) +
                 " stop_speed_limit_mps=" + jsonNumber(config_.arrival_speed);
             if (tracking()) { cancel(detail); }
@@ -164,16 +188,22 @@ namespace px4_control
             cancel("discontinuous/expired EGO trajectory; holding, new goal required");
             return {false, reason_};
         }
+        if (!tracking())
+        {
+            goal_ = end.position;
+            nearby_stop_ = adjustment.norm() > 1e-6;
+        }
         spline_ = spline;
         start_ = start;
         id_ = id;
-        reason_ = "following validated EGO spline";
+        reason_ = nearby_stop_ ? "following validated EGO spline to nearby free stop" : "following validated EGO spline";
         return {true, reason_};
     }
 
     void EgoExecution::cancel(const std::string& reason)
     {
         goal_.reset();
+        requested_goal_.reset();
         spline_.reset();
         reason_ = reason;
     }
@@ -203,7 +233,8 @@ namespace px4_control
             reference.acceleration.setZero();
             if (!std::isfinite(settled_since_)) { settled_since_ = steady; }
             if ((p - *goal_).norm() <= config_.goal_tolerance && v.norm() <= config_.arrival_speed)
-            { return stop("goal reached; holding, ready for next goal"); }
+            { return stop(nearby_stop_ ? "nearby goal reached; holding, ready for next goal" :
+                                        "goal reached; holding, ready for next goal"); }
             if (steady - settled_since_ > config_.settle_timeout) { return stop("arrival timeout; holding"); }
         }
         return reference;

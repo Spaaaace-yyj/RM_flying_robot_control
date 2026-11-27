@@ -145,6 +145,7 @@ namespace px4_control
             const auto ego_cancel_topic = parameter<std::string>("ego/cancel_topic", "/ego_preview/planning/cancel");
             const auto ego_rejected_goal_topic = parameter<std::string>("ego/rejected_goal_topic", "/ego_preview/planning/rejected_goal");
             ego_config_.max_goal_distance = positiveParameter("ego/max_goal_distance", 3.);
+            ego_config_.nearby_goal_radius = parameter<double>("ego/nearby_goal_radius", .5);
             ego_config_.min_z = parameter<double>("ego/min_goal_z", .3);
             ego_config_.max_z = parameter<double>("ego/max_goal_z", 2.2);
             ego_config_.max_velocity = positiveParameter("ego/max_velocity", .8);
@@ -171,7 +172,7 @@ namespace px4_control
                         const auto& p = m->pose.position;
                         const int64_t stamp = static_cast<int64_t>(m->header.stamp.sec) * 1000000000LL +
                             m->header.stamp.nanosec;
-                        if (!goalRejectionMatches(ego_goal_stamp_, *ego_.goal(), vio_config_.expected_frame,
+                        if (!goalRejectionMatches(ego_goal_stamp_, *ego_.requestedGoal(), vio_config_.expected_frame,
                                                   stamp, Vec3(p.x, p.y, p.z), m->header.frame_id)) { return; }
                         // The planner already cleared this target; do not send a redundant
                         // cross-topic cancel that could arrive after a newer goal.
@@ -591,7 +592,13 @@ namespace px4_control
                     const auto& p = m.pose.position;
                     result = ego_.begin(Vec3(p.x, p.y, p.z), alignment_.worldPosition(o.position),
                                         alignment_.worldVector(o.velocity), steady, ros);
-                    if (result.first)
+                    if (result.first && !ego_.busy())
+                    {
+                        // A repeat/very close goal is an accepted hold, with no planner request.
+                        const auto held = flight_.hold(steady, o);
+                        if (!held.first) { result = held; }
+                    }
+                    else if (result.first)
                     {
                         auto goal = m;
                         const auto sent = this->now();
@@ -651,9 +658,10 @@ namespace px4_control
                     planner_rx_ = steady;
                     planner_stamp_ = ros;
                     const auto end = spline.sample(spline.duration());
-                    RCLCPP_INFO(get_logger(), "EGO spline accepted: id=%ld duration=%.3fs endpoint=%s stop_speed=%.4fm/s",
+                    RCLCPP_INFO(get_logger(), "EGO spline accepted: id=%ld duration=%.3fs endpoint=%s stop_speed=%.4fm/s requested=%s adjustment_m=%.3f",
                                 static_cast<long>(m.traj_id), spline.duration(), jsonVector(end.position).c_str(),
-                                end.velocity.norm());
+                                end.velocity.norm(), jsonVector(*ego_.requestedGoal()).c_str(),
+                                (end.position - *ego_.requestedGoal()).norm());
                 }
                 else { RCLCPP_WARN(get_logger(), "EGO spline: %s", result.second.c_str()); }
             }
@@ -843,6 +851,8 @@ namespace px4_control
                     << ",\"ego_reason\":" << jsonString(ego_.reason())
                     << ",\"ego_event\":" << jsonString(ego_event_)
                     << ",\"ego_goal_odom\":" << (ego_.goal() ? jsonVector(*ego_.goal()) : "null")
+                    << ",\"ego_requested_goal_odom\":" << (ego_.requestedGoal() ? jsonVector(*ego_.requestedGoal()) : "null")
+                    << ",\"ego_nearby_goal_radius_m\":" << jsonNumber(ego_config_.nearby_goal_radius)
                     << ",\"ego_trajectory_id\":" << ego_.trajectoryId()
                     << ",\"ego_depth_pose_age_s\":" << jsonNumber(ros_now - depth_stamp_)
                     << ",\"ego_planner_rx_age_s\":" << jsonNumber(now - planner_rx_)

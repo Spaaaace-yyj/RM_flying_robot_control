@@ -62,12 +62,32 @@ int main()
             }
             else for(int i=7;i<10;++i) points.col(i)=goal+Vec3(.25,0.,0.);
             ego_planner::UniformBspline free_end(points,3,1.);
-            EgoExecution task; check(task.begin(goal,origin,zero,0.,100.).first);
+            EgoConfig strict; strict.nearby_goal_radius=0.;
+            EgoExecution task(strict); check(task.begin(goal,origin,zero,0.,100.).first);
             const auto rejection=task.receive(received(free_end),1,100.1,origin,zero,100.1);
             check(!rejection.first);
             check(rejection.second.find("position_error_m=")!=std::string::npos);
             check(rejection.second.find("terminal_speed_mps=")!=std::string::npos);
         }
+        // End-to-end contract: occupied request -> observed free candidate -> EGO's
+        // constrained complete curve -> executor -> confirmed nearby arrival.
+        auto free=[](const Vec3& p){return p.x()<=.7+1e-10;};
+        const auto stop=ego_planner::nearbyFreeGoal(goal,origin,.5,.1,free);
+        check(stop.has_value()); near(*stop,Vec3(.7,0,1));
+        Eigen::MatrixXd candidate(3,10);
+        const double progress[]{0.,0.,0.,.1,.3,.6,.8,1.,1.,1.};
+        for(int i=0;i<10;++i) candidate.col(i)=origin+progress[i]*(*stop-origin);
+        ego_planner::constrainCubicTerminal(candidate,1.,*stop,zero,zero);
+        ego_planner::UniformBspline curve(candidate,3,1.);
+        check(ego_planner::completeSplineClear(curve,.1,[&](const Vec3& p){return !free(p);}));
+        EgoExecution nearby;
+        check(nearby.begin(goal,origin,zero,0.,100.).first);
+        check(nearby.receive(received(curve),1,100.1,origin,zero,100.1).first);
+        near(*nearby.requestedGoal(),goal); near(*nearby.goal(),*stop);
+        check(nearby.tick(.1,100.1,origin,zero,true,true).has_value());
+        const double duration=curve.getTimeSum();
+        check(!nearby.tick(duration+.2,100.2+duration,*stop,zero,true,false));
+        check(nearby.reason().find("nearby goal reached")!=std::string::npos);
         std::cout<<checks<<" actual EGO/executor contract checks passed\n";
     }
     catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
