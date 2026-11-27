@@ -42,7 +42,7 @@ px4_control:
     require_ev_status: true
     require_ev_yaw: true
     max_vio_age: 0.8
-    max_backend_age: 1.0
+    max_backend_age: 2.0
     # High-rate local position/attitude watchdog.
     max_px4_age: 1.0
     # PX4 v1.14: vehicle_status ~2 Hz; estimator_status_flags ~1 Hz, or on change.
