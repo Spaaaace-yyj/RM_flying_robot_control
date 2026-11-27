@@ -4,6 +4,10 @@
 
 namespace px4_control
 {
+    // A delayed rejection for an earlier goal must never cancel a newer task.
+    bool goalRejectionMatches(int64_t sent_stamp, const Vec3& sent_goal, const std::string& expected_frame,
+                              int64_t reply_stamp, const Vec3& reply_goal, const std::string& reply_frame);
+
     struct Reference
     {
         Vec3 position = Vec3::Zero(), velocity = Vec3::Zero(), acceleration = Vec3::Zero();

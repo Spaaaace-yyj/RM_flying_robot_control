@@ -504,6 +504,9 @@ ros2 topic pub --once /px4_control/goal geometry_msgs/msg/PoseStamped \
 这是 **odom 中的绝对三维位置，单位为米**，不是相对前进 1 m，也不是 PX4 NED；
 先查看 `/imu_propagate` 的当前位置和地图。可省略时间戳（零时间戳在接收时处理），
 非零时间戳须在 1 s 内。目标 orientation 当前不控制 yaw。
+例如 `(1,0,1)` 是 odom 中的固定位置；机头前方 1 m 应由当前机体位置加上机头在 odom
+中的水平单位方向向量计算，z 按所需的绝对高度设置。管理器接收目标时打印
+`goal_odom`、`vehicle_odom`、`forward_odom` 和 `displacement_odom`，可直接核对方向与距离。
 每次只执行一个目标；规划期间保持原悬停点，收到有效轨迹后进入 `TRACK_TRAJECTORY`，
 只有轨迹到期且实际位置/速度达到门限才确认到点，返回 `HOVER`。之后可再次发送目标。
 
@@ -535,6 +538,19 @@ ros2 topic echo /px4_control/status
 收到成功规划时管理器会打印 `EGO spline accepted`，实际发送轨迹时状态为 `TRACK_TRAJECTORY`；
 EGO 自身的 `EXEC_TRAJ` 仅表示规划器正在运行其轨迹计时，不能单独确认飞控在执行。
 
+固定目标在规划前检查占据情况：被拒绝时回到等待目标，并通过
+`/ego_preview/planning/rejected_goal` 原样回传请求的时间戳、坐标系和位置。
+管理器只结束与当前请求完全匹配的任务，迟到的旧回复不会取消新目标；不再反复优化同一个
+已知无效终点。此话题可通过 `ego/rejected_goal_topic` 配置。
+
+目标拒绝日志中的 `reason` 分别为 `outside_map`（越界）、`occupied`（原始栅格占据）、
+`inflation_only`（原始格空闲但膨胀后占据），并列出目标/机体坐标、原始/膨胀值和地图边界。
+启动日志 `EGO map` 打印实际加载的几何参数。执行配置的 0.25 m 膨胀在 0.1 m 栅格上
+向上取整为 3 格，采用立方体膨胀，每轴延伸约 0.3 m；应结合机体尺寸和定位误差调整。
+无效的地图尺寸/分辨率在启动时明确报错，避免基础参数未加载时把所有目标都当作越界。
+在 RViz/Foxglove 中使用 `odom`，同时查看原始 `/ego_preview/grid_map/occupancy` 和
+膨胀 `/ego_preview/grid_map/occupancy_inflate`，区分真实障碍、膨胀覆盖和投影异常。
+
 任务到点、超时、hold、land、定位故障或遥控接管取消任务时，管理器会向
 `/ego_preview/planning/cancel` 发送 `std_msgs/msg/Empty`，使 EGO 清除目标并等待新任务，
 避免降落后仍按旧目标持续重规划。该话题可以通过 `ego/cancel_topic` 配置。
@@ -546,6 +562,7 @@ EGO 自身的 `EXEC_TRAJ` 仅表示规划器正在运行其轨迹计时，不能
 | `/ego_preview/planning/bspline` | 规划轨迹；仅在有效目标任务内接受 |
 | `/ego_preview/planning/data_display` | EGO 执行循环心跳 |
 | `/ego_preview/planning/cancel` | 管理器通知 EGO 清除任务，回到等待目标状态 |
+| `/ego_preview/planning/rejected_goal` | EGO 回传被拒绝的当前目标；管理器按请求身份关联 |
 | `/ego_input/camera_pose` | 与适配深度同帧发布的曝光位姿，用于感知时效检查 |
 | `/px4_control/status` | `ego_state`、`ego_reason`、`ego_event`、`ego_goal_odom`、`ego_trajectory_id` 等诊断 |
 | `px4_control/config/px4_control_vins_fusion.yaml` | `ego/*` 接口、任务和执行门限，默认启用 |
@@ -1108,7 +1125,7 @@ sudo docker compose exec rm-dev /ws/entrypoint.sh bash
 source /opt/ros/humble/setup.bash
 source /ws/install/setup.bash
 CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 \
-colcon build --executor sequential --packages-select traj_utils bspline_opt ego_planner ego_depth_inputs px4_control bringup \
+colcon build --executor sequential --packages-select traj_utils plan_env bspline_opt ego_planner ego_depth_inputs px4_control bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 source /ws/install/setup.bash
 ros2 launch bringup onboard_control.launch.py
@@ -1116,7 +1133,7 @@ ros2 launch bringup onboard_control.launch.py
 
 `traj_utils` 来自已锁定的 EGO 子模块；现在是 `px4_control` 的显式构建依赖。
 固定终端修复同时更新 EGO 的 `ros2_version` 分支和本仓库的子模块指针，必须执行子模块更新，
-并重新构建 `bspline_opt`、`ego_planner`，仅构建 `px4_control` 不会修复规划终端行为。
+并重新构建 `plan_env`、`bspline_opt`、`ego_planner`，仅构建 `px4_control` 不会更新地图诊断和规划终端行为。
 按第 7.3.1 节等待 HOVER 后发送目标。已有未提交标定/参数修改时先保留并合并，
 尤其检查 Fusion 控制配置中新加的 `ego/*` 参数是否完整。
 
@@ -1205,7 +1222,7 @@ PX4 管理器使用串行 ROS 回调，超时/心跳使用 steady/wall 时钟，
 
 - [PX4 消息适配提交](https://github.com/Spaaaace-yyj/RM_flying_robot_control/commit/785becca2a78afc73315ef0a858c9b59315661ba)
 - [EGO-Planner ROS 2 fork](https://github.com/Spaaaace-yyj/ego-planner-swarm)
-- [当前 EGO 固定终端/深度适配基线](https://github.com/Spaaaace-yyj/ego-planner-swarm/commit/7de57e86e210cbad49adffe0c1a4ec92e74b8e00)
+- [当前 EGO 固定终端/深度适配基线](https://github.com/Spaaaace-yyj/ego-planner-swarm/commit/d65b4663991a810a3b596d1416a1f2e4a7fa558f)
 - [VINS-Fusion 原始算法仓库](https://github.com/HKUST-Aerial-Robotics/VINS-Fusion)
 
 以下 PX4 v1.14 链接用于理解原方案；实际固件接口以第 4 节指定版本及所刷固件为准：

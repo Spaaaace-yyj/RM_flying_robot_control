@@ -4,6 +4,13 @@
 
 namespace px4_control
 {
+    bool goalRejectionMatches(int64_t sent_stamp, const Vec3& sent_goal, const std::string& expected_frame,
+                              int64_t reply_stamp, const Vec3& reply_goal, const std::string& reply_frame)
+    {
+        return sent_stamp > 0 && sent_stamp == reply_stamp && expected_frame == reply_frame &&
+            sent_goal.allFinite() && reply_goal.allFinite() && (sent_goal - reply_goal).norm() < 1e-9;
+    }
+
     EgoSpline::Curve EgoSpline::derivative(const Curve& c)
     {
         Curve d{c.degree - 1, {}, {c.knots.begin() + 1, c.knots.end() - 1}};

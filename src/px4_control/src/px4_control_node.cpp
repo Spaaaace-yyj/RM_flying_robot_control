@@ -143,6 +143,7 @@ namespace px4_control
             ego_pose_topic_ = parameter<std::string>("ego/depth_pose_topic", "/ego_input/camera_pose");
             ego_heartbeat_topic_ = parameter<std::string>("ego/heartbeat_topic", "/ego_preview/planning/data_display");
             const auto ego_cancel_topic = parameter<std::string>("ego/cancel_topic", "/ego_preview/planning/cancel");
+            const auto ego_rejected_goal_topic = parameter<std::string>("ego/rejected_goal_topic", "/ego_preview/planning/rejected_goal");
             ego_config_.max_goal_distance = positiveParameter("ego/max_goal_distance", 3.);
             ego_config_.min_z = parameter<double>("ego/min_goal_z", .3);
             ego_config_.max_z = parameter<double>("ego/max_goal_z", 2.2);
@@ -163,6 +164,21 @@ namespace px4_control
                 ego_cancel_pub_ = create_publisher<std_msgs::msg::Empty>(ego_cancel_topic, 1);
                 subscribe<geometry_msgs::msg::PoseStamped>("~/goal", rclcpp::QoS(1),
                     [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr m) { onGoal(*m); });
+                subscribe<geometry_msgs::msg::PoseStamped>(ego_rejected_goal_topic, rclcpp::QoS(1),
+                    [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr m)
+                    {
+                        if (!ego_.busy() || m->header.stamp.nanosec >= 1000000000U) { return; }
+                        const auto& p = m->pose.position;
+                        const int64_t stamp = static_cast<int64_t>(m->header.stamp.sec) * 1000000000LL +
+                            m->header.stamp.nanosec;
+                        if (!goalRejectionMatches(ego_goal_stamp_, *ego_.goal(), vio_config_.expected_frame,
+                                                  stamp, Vec3(p.x, p.y, p.z), m->header.frame_id)) { return; }
+                        // The planner already cleared this target; do not send a redundant
+                        // cross-topic cancel that could arrive after a newer goal.
+                        ego_.cancel("planner rejected goal occupancy/bounds; holding, inspect planner diagnostics");
+                        ego_event_ = ego_.reason();
+                        RCLCPP_WARN(get_logger(), "%s", ego_event_.c_str());
+                    });
                 subscribe<traj_utils::msg::Bspline>(ego_spline_topic_, rclcpp::QoS(10),
                     [this](traj_utils::msg::Bspline::ConstSharedPtr m) { onSpline(*m); });
                 subscribe<geometry_msgs::msg::PoseStamped>(ego_pose_topic_, rclcpp::SensorDataQoS(),
@@ -578,10 +594,17 @@ namespace px4_control
                     if (result.first)
                     {
                         auto goal = m;
-                        goal.header.stamp = this->now();
+                        const auto sent = this->now();
+                        goal.header.stamp = sent;
+                        ego_goal_stamp_ = sent.nanoseconds();
                         // Fixed-yaw execution ignores goal orientation; keep planner input normalized.
                         goal.pose.orientation.x = goal.pose.orientation.y = goal.pose.orientation.z = 0.;
                         goal.pose.orientation.w = 1.;
+                        const Vec3 current = alignment_.worldPosition(o.position);
+                        const Vec3 forward = alignment_.worldVector(Vec3(std::cos(o.heading), std::sin(o.heading), 0.));
+                        RCLCPP_INFO(get_logger(), "EGO goal coordinates: goal_odom=%s vehicle_odom=%s forward_odom=%s displacement_odom=%s",
+                                    jsonVector(*ego_.goal()).c_str(), jsonVector(current).c_str(),
+                                    jsonVector(forward).c_str(), jsonVector(*ego_.goal() - current).c_str());
                         ego_goal_pub_->publish(goal);
                     }
                 }
@@ -860,6 +883,7 @@ namespace px4_control
         std::string ego_goal_topic_, ego_spline_topic_, ego_pose_topic_, ego_heartbeat_topic_, ego_event_, last_ego_print_;
         double ego_depth_age_ = .8, ego_heartbeat_age_ = .8;
         double depth_stamp_ = 0., planner_stamp_ = 0., depth_rx_ = kNever, planner_rx_ = kNever;
+        int64_t ego_goal_stamp_ = 0;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ego_goal_pub_;
         rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr ego_cancel_pub_;
 

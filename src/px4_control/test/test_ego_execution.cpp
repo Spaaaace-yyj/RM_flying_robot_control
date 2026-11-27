@@ -41,6 +41,19 @@ int main()
 {
     try
     {
+        // Rejection replies echo the exact forwarded request identity, not just a nearby point.
+        check(goalRejectionMatches(100000001,goal,"odom",100000001,goal,"odom"));
+        check(!goalRejectionMatches(100000002,goal,"odom",100000001,goal,"odom"));
+        check(!goalRejectionMatches(100000001,goal,"odom",100000001,goal,"map"));
+        check(!goalRejectionMatches(100000001,goal,"odom",100000001,origin,"odom"));
+        check(!goalRejectionMatches(0,goal,"odom",0,goal,"odom"));
+        check(!goalRejectionMatches(100000001,goal,"odom",100000001,Vec3(NAN,0,1),"odom"));
+        EgoExecution newer;
+        check(newer.begin(goal,origin,zero,0.,100.).first);
+        if (goalRejectionMatches(100000002,goal,"odom",100000001,goal,"odom")) newer.cancel("stale rejection");
+        check(newer.busy());
+        if (goalRejectionMatches(100000002,goal,"odom",100000002,goal,"odom")) newer.cancel("current rejection");
+        check(!newer.busy());
         // Independent polynomial oracles for position and both derivatives.
         const std::vector<double> k{-3., -2., -1., 0., 1., 2., 3., 4.};
         EgoSpline line(3, {Vec3(0,0,0), Vec3(1,0,0), Vec3(2,0,0), Vec3(3,0,0)}, k, 2., 2.);
